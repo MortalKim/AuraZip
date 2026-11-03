@@ -1,0 +1,86 @@
+# 开发与构建
+
+## 环境
+
+- Windows 10 1809 或更新版本；新版资源管理器菜单验证需要 Windows 11。
+- .NET 8 SDK。
+- Visual Studio 2026、Windows App SDK C#、Windows SDK 和 MSVC v145 C++ 工具。
+- 在 Visual Studio Installer 中导入 [`.vsconfig`](../.vsconfig)。ARM64 额外需要对应 C++ 工具。
+- 注册开发 MSIX 包需要 Windows 允许开发部署。
+
+依赖版本以项目文件为准。官方压缩引擎已随源码保留，无需另行安装 7-Zip 才能运行 AuraZip。
+
+## 构建与运行
+
+在仓库根目录执行：
+
+```powershell
+dotnet build AuraZip/AuraZip.csproj -p:Platform=x64 -p:Configuration=Debug
+.\scripts\Run.ps1 -SkipBuild
+# 或合并构建与启动
+.\scripts\Run.ps1
+```
+
+`Run.ps1` 完成构建、本地 MSIX 注册和应用启动。重新构建前应先关闭正在运行的实例，以释放输出文件。
+
+右键扩展随应用构建。`Build-ShellExtension.ps1` 使用 `vswhere` 定位 Visual Studio，从 `ArchiveFormats.json` 生成 `ArchiveFormats.g.h`，无需手动注册 DLL。
+
+## 测试
+
+```powershell
+dotnet run --project tests/AuraZip.Core.Tests
+```
+
+核心测试生成独立临时目录，覆盖归档读取、解压、加密、分卷、CRC、路径检查、取消、元数据、ZIP/7Z 修改、注释、哈希和 Office 文本提取。RAR 样本来源与许可见 [样本说明](../tests/Fixtures/README.md)。
+
+先构建并注册 Debug 包，再运行界面验证。验证需要可交互桌面，避免同时操作测试窗口。
+
+```powershell
+powershell -File tests/CompressionUi.ps1 -Configuration Debug -IncludeTar
+powershell -File tests/FeaturesUi.ps1
+powershell -File tests/FeaturesUi.ps1 -ArchiveFormat 7z
+powershell -File tests/ProductivityUi.ps1
+
+# 生成公共样本后验证导航、解压、语言和拖出
+powershell -File scripts/New-SampleArchive.ps1
+.\scripts\Run.ps1 -SkipBuild -ArchivePath .\artifacts\Samples\AuraZip-sample.zip
+powershell -File tests/UiSmoke.ps1 -SampleArchive .\artifacts\Samples\AuraZip-sample.zip
+powershell -File tests/NavigationUi.ps1
+powershell -File tests/LanguageUi.ps1
+powershell -File tests/DragUi.ps1
+```
+
+`ProductivityUi.ps1` 使用系统默认文本编辑器验证文件写回流程。界面测试使用独立样本和输出目录。
+
+原生菜单测试位于 `tests/ShellTests.cpp`。用 Visual Studio MSBuild 构建 `AuraZip.Shell/AuraZip.Shell.vcxproj`，附加 `/p:Platform=x64 /p:Configuration=Debug /p:ShellTests=true`。运行生成的测试 EXE 时传入扩展 DLL 和实际压缩包的绝对路径；附加 `--registered` 检查已部署的 COM 注册。
+
+## 商店打包
+
+```powershell
+powershell -File scripts/Build-Store.ps1
+# 安装 ARM64 工具后可选
+powershell -File scripts/Build-Store.ps1 -IncludeArm64
+```
+
+生成 x86/x64 的 `.msixupload`，内部包含 `.msixbundle`，输出至 `artifacts/Store-<清单版本>/`。商店发布使用项目清单中的应用身份，派生应用应配置自己的发布身份。
+
+先生成公共样本和商店提交包，再验证真实包内容：
+
+```powershell
+powershell -File tests/StorePackage.ps1
+powershell -File tests/CompressionUi.ps1 -UseRegisteredPackage -IncludeTar
+```
+
+`StorePackage.ps1` 从提交包中提取应用到独立目录，验证实际包内容与启动行为。
+
+## 引擎、图标与本地目录
+
+`scripts/Fetch-ArchiveEngine.ps1` 从官方固定版本获取引擎并校验 SHA-256。该维护脚本需要本机安装 7-Zip 以解包安装程序，应用自身无需依赖它。
+
+`scripts/Generate-IconAssets.ps1` 从 `AuraZip/Assets/Brand/AuraZip-icon-archive-v2.png` 生成多尺寸图标。
+
+`bin/`、`obj/`、`artifacts/`、`AppPackages/`、`BundleArtifacts/`、`.vs/` 由 `.gitignore` 排除。`AuraZip/Engine/`、第三方许可证及对应源码随项目保留，并参与应用分发。
+
+## 许可证
+
+AuraZip 采用 [GPL-3.0-or-later](../LICENSE)。贡献与分发遵循同一许可证，第三方组件遵循其各自条款，详见 [第三方组件说明](THIRD_PARTY.md)。

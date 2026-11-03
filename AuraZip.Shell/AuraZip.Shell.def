@@ -1,0 +1,4 @@
+LIBRARY "AuraZip.Shell.dll"
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE

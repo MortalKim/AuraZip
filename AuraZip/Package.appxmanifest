@@ -1,0 +1,94 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  xmlns:systemai="http://schemas.microsoft.com/appx/manifest/systemai/windows10"
+  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+  xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+  xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
+  xmlns:desktop9="http://schemas.microsoft.com/appx/manifest/desktop/windows10/9"
+  IgnorableNamespaces="uap rescap systemai com desktop4 desktop5 desktop9">
+
+  <Identity
+    Name="600875F506911.AuraZipPreview"
+    Publisher="CN=D53B1635-0092-44DF-A5B8-4C5B7EC6CEE4"
+    Version="0.0.16.0" />
+
+  <mp:PhoneIdentity PhoneProductId="8694f25e-0107-458e-ba48-43dc535b6b0e" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
+
+  <Properties>
+    <DisplayName>AuraZip Preview</DisplayName>
+    <PublisherDisplayName>Hayne Kim</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26226.0" />
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26226.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="x-generate"/>
+  </Resources>
+
+  <Applications>
+    <Application Id="App"
+      Executable="$targetnametoken$.exe"
+      EntryPoint="$targetentrypoint$">
+      <uap:VisualElements
+        DisplayName="AuraZip Preview"
+        Description="AuraZip"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+        <uap:SplashScreen Image="Assets\SplashScreen.png" />
+      </uap:VisualElements>
+      <Extensions>
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:SurrogateServer DisplayName="AuraZip context menus">
+              <com:Class Id="817FCB27-554D-4DB7-A18B-3DC378557DE1" Path="AuraZip.Shell.dll" ThreadingModel="STA" />
+              <com:Class Id="04A89C32-9378-4E77-834F-F4A6CF89C708" Path="AuraZip.Shell.dll" ThreadingModel="STA" />
+            </com:SurrogateServer>
+          </com:ComServer>
+        </com:Extension>
+        <desktop4:Extension Category="windows.fileExplorerContextMenus">
+          <desktop4:FileExplorerContextMenus>
+            <desktop5:ItemType Type="*">
+              <desktop5:Verb Id="AuraZip" Clsid="817FCB27-554D-4DB7-A18B-3DC378557DE1" />
+            </desktop5:ItemType>
+            <desktop5:ItemType Type="Directory"><desktop5:Verb Id="AuraZipFolder" Clsid="817FCB27-554D-4DB7-A18B-3DC378557DE1" /></desktop5:ItemType>
+          </desktop4:FileExplorerContextMenus>
+        </desktop4:Extension>
+        <desktop9:Extension Category="windows.fileExplorerClassicContextMenuHandler">
+          <desktop9:FileExplorerClassicContextMenuHandler>
+            <desktop9:ExtensionHandler Type="*" Clsid="04A89C32-9378-4E77-834F-F4A6CF89C708" />
+            <desktop9:ExtensionHandler Type="Directory" Clsid="04A89C32-9378-4E77-834F-F4A6CF89C708" />
+          </desktop9:FileExplorerClassicContextMenuHandler>
+        </desktop9:Extension>
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="aurazip.archives">
+            <uap:DisplayName>ms-resource:ArchiveFileType</uap:DisplayName>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.zip</uap:FileType><uap:FileType>.7z</uap:FileType>
+              <uap:FileType>.rar</uap:FileType><uap:FileType>.tar</uap:FileType>
+              <uap:FileType>.gz</uap:FileType><uap:FileType>.tgz</uap:FileType>
+              <uap:FileType>.bz2</uap:FileType><uap:FileType>.xz</uap:FileType>
+              <uap:FileType>.001</uap:FileType><uap:FileType>.z01</uap:FileType>
+              <uap:FileType>.tbz</uap:FileType><uap:FileType>.tbz2</uap:FileType><uap:FileType>.txz</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <systemai:Capability Name="systemAIModels"/>
+  </Capabilities>
+</Package>

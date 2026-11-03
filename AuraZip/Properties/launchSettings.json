@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "AuraZip (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "AuraZip (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

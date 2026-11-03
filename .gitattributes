@@ -1,0 +1,12 @@
+* text=auto
+*.cs text
+*.xaml text
+*.json text
+*.md text
+*.ps1 text
+*.exe binary
+*.dll binary
+*.7z binary
+*.rar binary
+*.png binary
+*.ico binary
