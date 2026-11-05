@@ -2,7 +2,7 @@ param()
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 $assets = Join-Path (Split-Path -Parent $PSScriptRoot) 'AuraZip/Assets'
-$source = [Drawing.Image]::FromFile((Join-Path $assets 'Brand/AuraZip-icon-archive-v2.png'))
+$source = [Drawing.Image]::FromFile((Join-Path $assets 'Brand/AuraZip-icon-fluent-v3.png'))
 function New-IconBitmap([int]$Width, [int]$Height, [int]$IconSize) {
     $bitmap = [Drawing.Bitmap]::new($Width, $Height, [Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $graphics = [Drawing.Graphics]::FromImage($bitmap)

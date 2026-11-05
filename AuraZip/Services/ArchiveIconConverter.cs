@@ -1,19 +1,8 @@
-using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Data;
-using Microsoft.UI.Xaml.Media;
 using System;
 
 namespace AuraZip;
-
-public sealed class ArchiveIconConverter : IValueConverter
-{
-    private static readonly SolidColorBrush FileBrush = new(Colors.DimGray);
-    public static void UpdateTheme(bool dark) => FileBrush.Color = dark ? Colors.LightGray : Colors.DimGray;
-    public object Convert(object value, Type targetType, object parameter, string language) => value is true
-        ? new SolidColorBrush(Colors.Goldenrod) : FileBrush;
-    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
-}
 
 public sealed class FileTypeConverter : IValueConverter
 {

@@ -37,6 +37,8 @@ public sealed partial class MainWindow : Window
     private CancellationTokenSource? _previewCancellation;
     private DataTemplate? _wideFileTemplate;
     private bool _compactColumns;
+    private bool _showNarrowPreview = true;
+    private long _titleForegroundCallback;
     public ObservableCollection<ArchiveItem> VisibleItems { get; } = new();
     public ObservableCollection<FolderNode> FolderRoots { get; } = new();
     public string? InitialArchivePath { get; set; }
@@ -62,6 +64,7 @@ public sealed partial class MainWindow : Window
         int width = Math.Min((int)(1180 * scale), work.Width - 40), height = Math.Min((int)(820 * scale), work.Height - 40);
         AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(work.X + (work.Width - width) / 2, work.Y + (work.Height - height) / 2, width, height));
         Root.ActualThemeChanged += (_, _) => UpdateWindowTheme();
+        _titleForegroundCallback = WindowTitle.RegisterPropertyChangedCallback(TextBlock.ForegroundProperty, (_, _) => UpdateWindowTheme());
         ApplyTheme(); UpdateWindowTheme();
         AddShortcut(VirtualKey.O, VirtualKeyModifiers.Control, async () => await PickArchiveAsync());
         AddShortcut(VirtualKey.N, VirtualKeyModifiers.Control, async () => await CreateZipAsync());
@@ -75,7 +78,7 @@ public sealed partial class MainWindow : Window
         var copy = new KeyboardAccelerator { Key = VirtualKey.C, Modifiers = VirtualKeyModifiers.Control };
         copy.Invoked += (_, e) => { if (!_busy && !_dialogOpen) { e.Handled = true; Copy_Click(this, new RoutedEventArgs()); } };
         FileList.KeyboardAccelerators.Add(copy);
-        Closed += (_, _) => { _previewCancellation?.Cancel(); _opening?.Cancel(); ResetRichPreview(); };
+        Closed += (_, _) => { WindowTitle.UnregisterPropertyChangedCallback(TextBlock.ForegroundProperty, _titleForegroundCallback); _previewCancellation?.Cancel(); _opening?.Cancel(); ResetRichPreview(); };
         AppWindow.Closing += (_, e) => { if (_busy) { e.Cancel = true; StatusText.Text = T("Finish or cancel the current operation before closing AuraZip."); } };
     }
 
@@ -118,11 +121,11 @@ public sealed partial class MainWindow : Window
     private void ApplyTheme() => Root.RequestedTheme = _settings.Theme switch { "Light" => ElementTheme.Light, "Dark" => ElementTheme.Dark, _ => ElementTheme.Default };
     private void UpdateWindowTheme()
     {
-        bool dark = Root.ActualTheme == ElementTheme.Dark;
-        AppWindow.TitleBar.ButtonForegroundColor = dark ? Microsoft.UI.Colors.White : Microsoft.UI.Colors.Black;
-        AppWindow.TitleBar.ButtonInactiveForegroundColor = dark ? Microsoft.UI.Colors.LightGray : Microsoft.UI.Colors.DimGray;
+        // Track the resolved theme brush, including contrast-theme resource changes.
+        Windows.UI.Color? foreground = (WindowTitle.Foreground as Microsoft.UI.Xaml.Media.SolidColorBrush)?.Color;
+        AppWindow.TitleBar.ButtonForegroundColor = foreground;
+        AppWindow.TitleBar.ButtonInactiveForegroundColor = foreground;
         AppWindow.TitleBar.ButtonBackgroundColor = AppWindow.TitleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
-        ArchiveIconConverter.UpdateTheme(dark);
     }
     private void ShowStart()
     {
@@ -246,9 +249,21 @@ public sealed partial class MainWindow : Window
         ExtractCommand.IsEnabled = TestCommand.IsEnabled = PropertiesCommand.IsEnabled = _index is not null && !_busy;
         ViewCommand.IsEnabled = _index is not null && FileList.SelectedItems.Count == 1 && !_busy;
         AddFilesCommand.IsEnabled = DeleteCommand.IsEnabled = _index is not null && EditableZip && !_busy;
-        FolderPane.Visibility = _settings.ShowFolderPane && Root.ActualWidth >= 860 ? Visibility.Visible : Visibility.Collapsed;
-        FolderColumn.Width = FolderPane.Visibility == Visibility.Visible ? new GridLength(260) : new GridLength(0);
+        bool narrow = Root.ActualWidth < 860;
+        FolderPane.Visibility = (narrow ? _showNarrowPreview : _settings.ShowFolderPane) ? Visibility.Visible : Visibility.Collapsed;
+        FolderColumn.Width = !narrow && _settings.ShowFolderPane ? new GridLength(260) : new GridLength(0);
+        Grid.SetRow(FolderPane, narrow ? 1 : 0);
+        Grid.SetColumnSpan(FolderPane, narrow ? 2 : 1);
+        FolderPane.Height = narrow ? Math.Clamp(Root.ActualHeight * .32, 120, 260) : double.NaN;
+        FolderTreeSection.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
+        Grid.SetRow(PreviewSection, narrow ? 0 : 1);
+        Grid.SetRowSpan(PreviewSection, narrow ? 2 : 1);
+        PreviewPaneCommand.Visibility = narrow ? Visibility.Visible : Visibility.Collapsed;
+        PreviewPaneCommand.Label = T(_showNarrowPreview ? "隐藏预览" : "显示预览");
+        PreviewPaneCommand.IsEnabled = _index is not null;
     }
+    private void PreviewPane_Click(object sender, RoutedEventArgs e)
+    { _showNarrowPreview = !_showNarrowPreview; UpdateCommands(); }
 
     private async Task UpdatePreviewAsync()
     {
@@ -442,13 +457,14 @@ public sealed partial class MainWindow : Window
         var language = new ComboBox { Header = T("语言"), ItemsSource = new[] { T("跟随系统"), "简体中文", "English" }, SelectedIndex = _settings.Language == "zh-CN" ? 1 : _settings.Language == "en-US" ? 2 : 0, HorizontalAlignment = HorizontalAlignment.Stretch };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(language, "LanguageSelector");
         var theme = new ComboBox { Header = T("外观"), ItemsSource = new[] { T("跟随系统"), T("浅色"), T("深色") }, SelectedIndex = _settings.Theme == "Light" ? 1 : _settings.Theme == "Dark" ? 2 : 0, HorizontalAlignment = HorizontalAlignment.Stretch };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(theme, "ThemeSelector");
         var mode = new ComboBox { Header = T("默认解压目录"), ItemsSource = new[] { T("压缩包所在目录"), T("指定目录") }, SelectedIndex = _settings.UseArchiveDirectory ? 0 : 1, HorizontalAlignment = HorizontalAlignment.Stretch };
         var custom = new TextBox { Header = T("指定目录"), Text = _settings.CustomDirectory, Visibility = _settings.UseArchiveDirectory ? Visibility.Collapsed : Visibility.Visible };
         mode.SelectionChanged += (_, _) => custom.Visibility = mode.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
         var open = new CheckBox { Content = T("完成后打开目标文件夹"), IsChecked = _settings.OpenAfterExtraction };
         var panel = new StackPanel { Spacing = 18, MinWidth = Math.Min(360, Math.Max(200, Root.ActualWidth - 80)) }; panel.Children.Add(language); panel.Children.Add(theme); panel.Children.Add(mode); panel.Children.Add(custom); panel.Children.Add(open);
         panel.Children.Add(new TextBlock { Text = T("压缩文件的操作收纳在 AuraZip 子菜单中。"), TextWrapping = TextWrapping.Wrap, MaxWidth = 360, FontSize = 12 });
-        var dialog = new ContentDialog { XamlRoot = Root.XamlRoot, Title = T("设置"), Content = panel, PrimaryButtonText = T("保存"), CloseButtonText = T("取消"), DefaultButton = ContentDialogButton.Primary };
+        var dialog = new ContentDialog { XamlRoot = Root.XamlRoot, Title = T("设置"), Content = new ScrollViewer { Content = panel, MaxHeight = Math.Max(160, Root.ActualHeight - 180), HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }, PrimaryButtonText = T("保存"), CloseButtonText = T("取消"), DefaultButton = ContentDialogButton.Primary };
         dialog.PrimaryButtonClick += (_, e) => { if (mode.SelectedIndex == 1 && !Path.IsPathFullyQualified(custom.Text)) { e.Cancel = true; custom.Header = T("Enter an absolute directory path."); } };
         _dialogOpen = true;
         try
@@ -487,6 +503,10 @@ public sealed partial class MainWindow : Window
             }
         }
         var searchName = _searchAll ? T("搜索整个压缩包") : T("搜索当前目录");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(BackButton, T("返回 (Alt+←)"));
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(UpButton, T("上一级 (Alt+↑)"));
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(FileList, T("文件和文件夹"));
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(FolderTree, T("文件夹"));
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(SearchBox, searchName);
         foreach (var text in Children(SearchBox).OfType<TextBox>())
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(text, searchName);

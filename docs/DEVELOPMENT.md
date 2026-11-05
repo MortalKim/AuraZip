@@ -46,15 +46,22 @@ powershell -File scripts/New-SampleArchive.ps1
 .\scripts\Run.ps1 -SkipBuild -ArchivePath .\artifacts\Samples\AuraZip-sample.zip
 powershell -File tests/UiSmoke.ps1 -SampleArchive .\artifacts\Samples\AuraZip-sample.zip
 powershell -File tests/NavigationUi.ps1
+powershell -File tests/FluentUi.ps1
 powershell -File tests/LanguageUi.ps1
 powershell -File tests/DragUi.ps1
 ```
 
 `ProductivityUi.ps1` 使用系统默认文本编辑器验证文件写回流程。界面测试使用独立样本和输出目录。
 
+`FluentUi.ps1` 检查导航与文件列表的无障碍名称、窄窗口预览的显示和隐藏、宽窗口布局恢复以及浅色与深色主题切换。截图写入 `artifacts/FluentUi-<标识>/`，测试结束后恢复窗口尺寸与主题。可用 `-AppProcessId <进程 ID>` 指定已打开公共样本的应用实例。
+
 原生菜单测试位于 `tests/ShellTests.cpp`。用 Visual Studio MSBuild 构建 `AuraZip.Shell/AuraZip.Shell.vcxproj`，附加 `/p:Platform=x64 /p:Configuration=Debug /p:ShellTests=true`。运行生成的测试 EXE 时传入扩展 DLL 和实际压缩包的绝对路径；附加 `--registered` 检查已部署的 COM 注册。
 
 ## 商店打包
+
+在 Visual Studio 中选择 Release 配置，右键应用项目，进入 Package and Publish，选择已关联的 Microsoft Store 应用。项目会生成用于提交的 `.msixupload`；多架构包选择 x86 和 x64，包捆绑选择 Always。中性架构不适用于包含原生代码的应用。
+
+也可使用脚本生成商店提交包：
 
 ```powershell
 powershell -File scripts/Build-Store.ps1
@@ -77,7 +84,7 @@ powershell -File tests/CompressionUi.ps1 -UseRegisteredPackage -IncludeTar
 
 `scripts/Fetch-ArchiveEngine.ps1` 从官方固定版本获取引擎并校验 SHA-256。该维护脚本需要本机安装 7-Zip 以解包安装程序，应用自身无需依赖它。
 
-`scripts/Generate-IconAssets.ps1` 从 `AuraZip/Assets/Brand/AuraZip-icon-archive-v2.png` 生成多尺寸图标。
+`scripts/Generate-IconAssets.ps1` 从 `AuraZip/Assets/Brand/AuraZip-icon-fluent-v3.png` 生成窗口、任务栏、文件关联及 MSIX 清单使用的多尺寸 PNG 和 ICO 图标。更新图标源图后运行该脚本，并提交源图及生成的资源。
 
 `bin/`、`obj/`、`artifacts/`、`AppPackages/`、`BundleArtifacts/`、`.vs/` 由 `.gitignore` 排除。`AuraZip/Engine/`、第三方许可证及对应源码随项目保留，并参与应用分发。
 

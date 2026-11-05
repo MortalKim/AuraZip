@@ -1,4 +1,6 @@
 {
+  "显示预览": "显示预览",
+  "隐藏预览": "隐藏预览",
   "Finish or cancel the current operation before closing AuraZip.": "请先完成或取消当前操作，再关闭 AuraZip。",
   "Could not open the file picker": "无法打开文件选择器",
   "Archive not found": "找不到压缩包",

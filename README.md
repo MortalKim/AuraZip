@@ -21,6 +21,7 @@ An open-source archive manager for Windows, built with WinUI 3. Browse archive c
 - Smart extraction: extract a single top-level item directly, or create a folder named after the archive when it contains multiple top-level items.
 - Add, update, delete, and rename entries in single-volume ZIP and 7Z archives. Confirm and save externally edited files back into the archive.
 - Navigate with a folder tree and preview files with a single click, including text, images, PDF pages, Office document text, audio, and video.
+- Keep previews visible below the file list in narrow windows, with a toolbar action to show or hide the pane.
 - Access modern Windows 11 and classic context-menu actions under a single AuraZip submenu.
 - Search across an archive with wildcards, copy or drag files out, test archive integrity, compare SHA-256 and MD5 hashes, and edit ZIP comments.
 - Switch instantly between English and Simplified Chinese. Follow the system theme or choose light or dark mode.

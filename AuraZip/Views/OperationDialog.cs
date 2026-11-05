@@ -36,9 +36,10 @@ public sealed class OperationDialog
         panel.Children.Add(elapsed); panel.Children.Add(rate); panel.Children.Add(status);
         var dialog = new ContentDialog
         {
-            XamlRoot = root, Title = title, Content = panel,
+            XamlRoot = root, Title = title,
+            Content = new ScrollViewer { Content = panel, MaxHeight = Math.Max(160, root.Size.Height - 180), HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled },
             PrimaryButtonText = destination is null ? "" : T("打开目标文件夹"),
-            SecondaryButtonText = T("暂停"), CloseButtonText = T("取消"), DefaultButton = ContentDialogButton.Close
+            SecondaryButtonText = T("暂停"), CloseButtonText = T("取消"), DefaultButton = ContentDialogButton.None
         };
         dialog.PrimaryButtonClick += (_, args) =>
         {
