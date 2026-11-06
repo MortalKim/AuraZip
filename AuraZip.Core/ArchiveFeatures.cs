@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Text.RegularExpressions;
 
 namespace AuraZip.Core;
 
@@ -12,8 +11,14 @@ public sealed record CompressionResult(IReadOnlyList<string> Files, long Origina
 public sealed class TemporaryWorkspace : IDisposable
 {
     private static readonly string Root = System.IO.Path.GetFullPath(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "AuraZip"));
-    public string Path { get; } = System.IO.Path.Combine(Root, Guid.NewGuid().ToString("N"));
-    public TemporaryWorkspace() => Directory.CreateDirectory(Path);
+    private readonly string _parent;
+    public string Path { get; }
+    public TemporaryWorkspace(string? parent = null)
+    {
+        _parent = System.IO.Path.GetFullPath(parent ?? Root);
+        Path = System.IO.Path.Combine(_parent, parent is null ? Guid.NewGuid().ToString("N") : $".aurazip-{Guid.NewGuid():N}.tmp");
+        Directory.CreateDirectory(Path);
+    }
     public static void CleanupExpired()
     {
         if (!Directory.Exists(Root)) return;
@@ -26,7 +31,7 @@ public sealed class TemporaryWorkspace : IDisposable
     public void Dispose()
     {
         var full = System.IO.Path.GetFullPath(Path);
-        if (!full.StartsWith(Root + System.IO.Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new IOException("Invalid temporary workspace.");
+        if (!string.Equals(System.IO.Path.GetDirectoryName(full), System.IO.Path.TrimEndingDirectorySeparator(_parent), StringComparison.OrdinalIgnoreCase)) throw new IOException("Invalid temporary workspace.");
         try { Delete(new DirectoryInfo(full)); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
     private static void Delete(FileSystemInfo entry)
@@ -48,7 +53,7 @@ public sealed partial class ArchiveService
         var drive = new DriveInfo(root);
         if (drive.IsReady && drive.AvailableFreeSpace < required) throw new IOException($"Not enough free space. Required: {ArchiveItem.FormatSize(required)}; available: {ArchiveItem.FormatSize(drive.AvailableFreeSpace)}.");
     }
-    private static IEnumerable<(string Source, string Key, bool Directory)> SourceEntries(IReadOnlyList<string> paths, string? excluded = null)
+    private static IEnumerable<(string Source, string Key, bool Directory)> SourceEntries(IReadOnlyList<string> paths, string? excluded = null, CancellationToken token = default)
     {
         foreach (var source in paths.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase))
         {
@@ -59,6 +64,7 @@ public sealed partial class ArchiveService
         }
         IEnumerable<(string, string, bool)> Walk(string path, string key)
         {
+            token.ThrowIfCancellationRequested();
             if (excluded is not null && string.Equals(path, excluded, StringComparison.OrdinalIgnoreCase)) yield break;
             var attributes = File.GetAttributes(path);
             if ((attributes & FileAttributes.ReparsePoint) != 0) throw new IOException($"Symbolic-link sources are not supported: {path}");
@@ -77,14 +83,25 @@ public sealed partial class ArchiveService
             throw new ArgumentException("ZIP passwords must contain 1–99 printable ASCII characters. Use 7z for Unicode passwords.");
         destination = Path.GetFullPath(destination);
         if (!File.Exists(_enginePath)) throw new FileNotFoundException("The bundled compression engine is missing.", _enginePath);
-        var entries = await Task.Run(() => SourceEntries(paths, destination).ToList(), token);
+        var entries = await Task.Run(() => SourceEntries(paths, destination, token).ToList(), token).ConfigureAwait(false);
         if (entries.Select(e => e.Key).Distinct(StringComparer.OrdinalIgnoreCase).Count() != entries.Count) throw new IOException("Selected items have duplicate names. Choose their parent folders instead.");
         long total = entries.Where(e => !e.Directory).Sum(e => new FileInfo(e.Source).Length);
-        EnsureSpace(destination, total + total / 20 + 1024 * 1024);
-        using var workspace = new TemporaryWorkspace();
-        EnsureSpace(workspace.Path, total * 2 + 1024 * 1024);
-        var input = Path.Combine(workspace.Path, "input"); Directory.CreateDirectory(input);
-        long copied = 0; int done = 0, count = entries.Count(e => !e.Directory);
+        bool wrappedTar = options.Format.StartsWith("tar.", StringComparison.Ordinal);
+        var roots = paths.Select(p => Path.TrimEndingDirectorySeparator(Path.GetFullPath(p))).Distinct(StringComparer.OrdinalIgnoreCase).Where(p => !string.Equals(p, destination, StringComparison.OrdinalIgnoreCase)).ToArray();
+        var sourceParent = roots.Length > 0 ? Path.GetDirectoryName(roots[0]) : null;
+        // Read ordinary selections directly. Isolate mixed-parent selections and outputs
+        // inside a selected folder so archive names and source traversal stay unchanged.
+        bool direct = sourceParent is not null && roots.All(p => string.Equals(Path.GetDirectoryName(p), sourceParent, StringComparison.OrdinalIgnoreCase))
+            && !roots.Any(p => Directory.Exists(p) && destination.StartsWith(p.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+        EnsureSpace(destination, checked(total * ((direct ? 1 : 2) + (wrappedTar ? 1 : 0)) + total / 20 + 1024 * 1024));
+        var destinationDirectory = Path.GetDirectoryName(destination)!;
+        Directory.CreateDirectory(destinationDirectory);
+        using var workspace = new TemporaryWorkspace(destinationDirectory);
+        var input = direct ? sourceParent! : Path.Combine(workspace.Path, "input");
+        if (!direct) Directory.CreateDirectory(input);
+        long copied = 0; int count = entries.Count(e => !e.Directory);
+        progress.Report(new("", 0, total, 0, count, ArchiveOperationStage.Preparing));
+        if (!direct)
         await Task.Run(() =>
         {
             foreach (var entry in entries)
@@ -97,8 +114,7 @@ public sealed partial class ArchiveService
                     Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                     using var source = File.OpenRead(entry.Source); using var output = File.Create(target);
                     var buffer = new byte[128 * 1024]; int read;
-                    while ((read = source.Read(buffer)) > 0) { control.Wait(token); output.Write(buffer, 0, read); copied += read; progress.Report(new(entry.Key, copied / 2, total, done, count)); }
-                    done++;
+                    while ((read = source.Read(buffer)) > 0) { control.Wait(token); output.Write(buffer, 0, read); copied += read; progress.Report(new(entry.Key, copied / 10, total, 0, count, ArchiveOperationStage.Preparing)); }
                 }
                 if (!entry.Directory)
                 {
@@ -110,47 +126,40 @@ public sealed partial class ArchiveService
         }, token);
         var outputArchive = Path.Combine(workspace.Path, "output." + options.Format);
         var list = Path.Combine(workspace.Path, "inputs.txt");
-        await File.WriteAllLinesAsync(list, Directory.EnumerateFileSystemEntries(input).Select(Path.GetFileName)!, new UTF8Encoding(false), token);
-        bool wrappedTar = options.Format.StartsWith("tar.", StringComparison.Ordinal);
+        await File.WriteAllLinesAsync(list, (direct ? roots : Directory.GetFileSystemEntries(input)).Select(Path.GetFileName)!, new UTF8Encoding(false), token);
         var arguments = new List<string> { "a", "-t" + (wrappedTar ? "tar" : options.Format), "-scsUTF-8", "-sccUTF-8", "-bsp1", "-bb1", "-y", "-spd" };
         if (!options.Format.StartsWith("tar", StringComparison.Ordinal)) { arguments.Add("-mx=" + options.Level); arguments.Add("-mmt=on"); }
         if (!string.IsNullOrEmpty(options.Password)) { arguments.Add("-p" + options.Password); arguments.Add(options.Format == "zip" ? "-mem=AES256" : "-mhe=" + (options.EncryptNames ? "on" : "off")); }
         if (options.VolumeBytes > 0 && !wrappedTar) arguments.Add("-v" + options.VolumeBytes + "b");
         var tarArchive = Path.Combine(workspace.Path, "content.tar");
         arguments.Add(wrappedTar ? tarArchive : outputArchive); arguments.Add("@" + list);
-        await Task.Run(() => RunEngineAsync(arguments, input, control, new Progress<ArchiveProgress>(p => progress.Report(p with { BytesDone = total / 2 + p.BytesDone / 2 })), total, count, token), token);
+        long start = direct ? 0 : total / 10;
+        long firstEnd = wrappedTar ? total / 3 : total - total / 100;
+        var fileSizes = entries.Where(e => !e.Directory).ToDictionary(e => e.Key, e => new FileInfo(e.Source).Length, StringComparer.OrdinalIgnoreCase);
+        var firstProgress = new CompressionProgress(p => progress.Report(p with { BytesDone = start + (long)((double)p.BytesDone / Math.Max(1, total) * (firstEnd - start)), Stage = ArchiveOperationStage.Compressing }));
+        await RunEngineAsync(arguments, input, control, firstProgress, total, count, token, fileSizes);
         if (wrappedTar)
         {
             var codec = options.Format[4..] == "gz" ? "gzip" : options.Format[4..] == "bz2" ? "bzip2" : "xz";
-            var wrap = new List<string> { "a", "-t" + codec, "-mx=" + options.Level, "-bsp1", "-y" };
+            var wrap = new List<string> { "a", "-t" + codec, "-mx=" + options.Level, "-bsp1", "-sccUTF-8", "-y" };
             if (options.VolumeBytes > 0) wrap.Add("-v" + options.VolumeBytes + "b");
             wrap.Add(outputArchive); wrap.Add(tarArchive);
-            await Task.Run(() => RunEngineAsync(wrap, workspace.Path, control, progress, total, count, token), token);
+            var wrapProgress = new CompressionProgress(p => progress.Report(p with { FileName = Path.GetFileName(destination), BytesDone = firstEnd + (long)((double)p.BytesDone / Math.Max(1, total) * (total - total / 100 - firstEnd)), FilesDone = count, Stage = ArchiveOperationStage.Compressing }));
+            await RunEngineAsync(wrap, workspace.Path, control, wrapProgress, total, count, token);
         }
         var outputs = Directory.EnumerateFiles(workspace.Path, "output." + options.Format + "*").OrderBy(p => p, StringComparer.Ordinal).ToList();
         if (outputs.Count == 0) throw new IOException("The compression engine did not produce an archive.");
         var targets = outputs.Select(p => destination + p[outputArchive.Length..]).ToArray();
         if (targets.Any(p => Directory.Exists(p) || (!overwrite && File.Exists(p)))) throw new IOException("An output archive already exists. Choose a different name.");
         long packed = outputs.Sum(p => new FileInfo(p).Length);
-        // Stage all completed volumes beside the destination before committing any of them.
-        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-        var staged = targets.Select(p => p + "." + Guid.NewGuid().ToString("N") + ".tmp").ToArray();
-        try
+        // The engine output is already on the destination volume: commit by renaming.
+        progress.Report(new(Path.GetFileName(destination), total - total / 100, total, count, count, ArchiveOperationStage.Finalizing));
+        await Task.Run(() =>
         {
-            await Task.Run(() =>
-            {
-                for (int i = 0; i < outputs.Count; i++)
-                {
-                    using var inputStream = File.OpenRead(outputs[i]); using var outputStream = File.Create(staged[i]);
-                    var buffer = new byte[128 * 1024]; int read;
-                    while ((read = inputStream.Read(buffer)) > 0) { control.Wait(token); outputStream.Write(buffer, 0, read); }
-                }
                 var committed = new List<string>();
-                try { for (int i = 0; i < outputs.Count; i++) { control.Wait(token); File.Move(staged[i], targets[i], overwrite); committed.Add(targets[i]); } }
+                try { for (int i = 0; i < outputs.Count; i++) { control.Wait(token); File.Move(outputs[i], targets[i], overwrite); committed.Add(targets[i]); } }
                 catch { if (!overwrite) foreach (var path in committed) File.Delete(path); throw; }
-            }, token);
-        }
-        finally { foreach (var path in staged) if (File.Exists(path)) File.Delete(path); }
+        }, token);
         progress.Report(new(Path.GetFileName(destination), total, total, count, count));
         return new(targets, total, packed);
     }
@@ -158,24 +167,23 @@ public sealed partial class ArchiveService
     [DllImport("ntdll.dll")] private static extern int NtSuspendProcess(nint process);
     [DllImport("ntdll.dll")] private static extern int NtResumeProcess(nint process);
     private async Task RunEngineAsync(IEnumerable<string> arguments, string workingDirectory, OperationControl control,
-        IProgress<ArchiveProgress> progress, long total, int files, CancellationToken token)
+        IProgress<ArchiveProgress> progress, long total, int files, CancellationToken token, IReadOnlyDictionary<string, long>? fileSizes = null)
     {
         var start = new ProcessStartInfo(_enginePath) { WorkingDirectory = workingDirectory, UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true, StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8 };
         foreach (var argument in arguments) start.ArgumentList.Add(argument);
         using var process = Process.Start(start)!;
         process.StandardInput.Close();
-        string lastFile = "";
+        var parser = new CompressionProgressParser(progress, total, files, fileSizes);
         var reading = Task.Run(async () =>
         {
-            var buffer = new char[2048]; string tail = ""; int count;
+            var buffer = new char[2048]; var line = new StringBuilder(); int count;
             while ((count = await process.StandardOutput.ReadAsync(buffer)) > 0)
             {
-                tail += new string(buffer, 0, count);
-                foreach (Match match in Regex.Matches(tail, @"(?:^|[\r\n])\+ (.+)")) lastFile = match.Groups[1].Value.Trim();
-                var percentages = Regex.Matches(tail, @"(\d{1,3})%");
-                if (percentages.Count > 0 && int.TryParse(percentages[^1].Groups[1].Value, out int value)) progress.Report(new(lastFile, total * Math.Min(value, 100) / 100, total, 0, files));
-                if (tail.Length > 4096) tail = tail[^1024..];
+                for (int i = 0; i < count; i++)
+                    if (buffer[i] is '\r' or '\n') { parser.Read(line.ToString()); line.Clear(); }
+                    else if (buffer[i] != '\b') line.Append(buffer[i]);
             }
+            if (line.Length > 0) parser.Read(line.ToString());
         });
         var errors = process.StandardError.ReadToEndAsync();
         bool suspended = false;
@@ -191,6 +199,7 @@ public sealed partial class ArchiveService
             await reading;
             var error = await errors;
             if (process.ExitCode != 0) throw new IOException("Compression engine error " + process.ExitCode + ": " + error.Trim());
+            parser.Complete();
         }
         catch
         {
@@ -254,7 +263,7 @@ public sealed partial class ArchiveService
         }
         var toRemove = remove?.ToHashSet(StringComparer.Ordinal) ?? new();
         if (additionRoot.Length > 0) SafeOutputPath(Path.GetTempPath(), additionRoot);
-        var incoming = additions is null ? [] : SourceEntries(additions, index.FilePath).Select(e => (e.Source, Key: additionRoot.Length == 0 ? e.Key : additionRoot + "/" + e.Key, e.Directory)).ToList();
+        var incoming = additions is null ? [] : SourceEntries(additions, index.FilePath, token).Select(e => (e.Source, Key: additionRoot.Length == 0 ? e.Key : additionRoot + "/" + e.Key, e.Directory)).ToList();
         if (incoming.Select(e => e.Key).Distinct(StringComparer.OrdinalIgnoreCase).Count() != incoming.Count) throw new IOException("Selected items contain duplicate names.");
         var incomingKeys = incoming.Select(e => e.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var metadata = index.Items.ToDictionary(e => e.Key, StringComparer.Ordinal);
@@ -270,6 +279,7 @@ public sealed partial class ArchiveService
             {
                 long bytes = 0, total = index.Items.Where(e => !e.IsDirectory).Sum(e => e.Size) + incoming.Where(e => !e.Directory).Sum(e => new FileInfo(e.Source).Length);
                 int done = 0, count = original.Entries.Count + incoming.Count;
+                var buffer = new byte[128 * 1024];
                 var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var source in original.Entries)
                 {
@@ -299,7 +309,7 @@ public sealed partial class ArchiveService
                 void Copy(Stream input, Stream outputStream, string name, bool validate = false)
                 {
                     var checksum = new Crc32(); long actual = 0;
-                    var buffer = new byte[128 * 1024]; int read;
+                    int read;
                     while ((read = input.Read(buffer)) > 0) { control.Wait(token); outputStream.Write(buffer, 0, read); if (validate) checksum.Append(buffer, read); actual += read; bytes += read; progress.Report(new(name, bytes, total, done, count)); }
                     if (validate) checksum.Validate(metadata.GetValueOrDefault(name), name, actual);
                 }

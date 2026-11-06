@@ -7,3 +7,5 @@ Source: https://github.com/adamhathcock/sharpcompress/tree/b6cc95af73950c914e0c6
 The upstream MIT license is included as `SharpCompress-LICENSE.txt`. These files are used only for archive decoding, extraction and checksum tests.
 
 Multipart fixtures `Rar.multi.part*`, `Rar.multi.solid.part*` and `Rar2.multi.*` come from the same pinned commit and license. They cover normal, solid and legacy multipart RAR extraction.
+
+`EncryptedRar/` contains encrypted RAR4, RAR5 and multipart samples from the same source and license. The test password is `test`. Regression tests cover header encryption, password retry classification, keyed checksums, selected extraction, corrupt data and cancellation. Reference file hashes were also checked against NanaZip 7.0.

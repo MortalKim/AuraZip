@@ -23,5 +23,11 @@
   " Use the folder button to retry.": " 请点击打开目标文件夹重试。",
   "Operation failed": "操作失败",
   "\nCheck the file, password and destination, then try again.": "\n请检查文件、密码和目标目录后重试。",
-  "The destination folder does not exist yet.": "目标文件夹尚未创建。"
+  "The destination folder does not exist yet.": "目标文件夹尚未创建。",
+  "正在准备文件…": "正在准备文件…",
+  "正在压缩文件…": "正在压缩文件…",
+  "正在完成压缩包…": "正在完成压缩包…",
+  "密码错误或加密数据已损坏，请重新输入密码。": "密码错误或加密数据已损坏，请重新输入密码。",
+  "The password is incorrect or the encrypted data is damaged.": "密码错误或加密数据已损坏。",
+  "A password is required to read this archive.": "读取此压缩包需要密码。"
 }

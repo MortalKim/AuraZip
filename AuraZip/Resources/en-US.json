@@ -200,5 +200,11 @@
   "文本预览": "Text preview",
   "当前系统无法解码此媒体，请使用外部应用打开。": "This system cannot decode the media. Open it in an external application.",
   "上一页": "Previous page",
-  "下一页": "Next page"
+  "下一页": "Next page",
+  "正在准备文件…": "Preparing files…",
+  "正在压缩文件…": "Compressing files…",
+  "正在完成压缩包…": "Finalizing archive…",
+  "密码错误或加密数据已损坏，请重新输入密码。": "The password is incorrect or the encrypted data is damaged. Enter the password again.",
+  "The password is incorrect or the encrypted data is damaged.": "The password is incorrect or the encrypted data is damaged.",
+  "A password is required to read this archive.": "A password is required to read this archive."
 }

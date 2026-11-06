@@ -84,6 +84,6 @@ Copyright (C) 2026 AuraZip contributors.
 
 AuraZip 采用 **GNU General Public License v3.0 or later（GPL-3.0-or-later）**。你可以按照许可证条款使用、修改和分发本项目。完整条款见 [LICENSE](LICENSE)。
 
-归档读取使用 SharpCompress，压缩使用随附的官方 7-Zip 引擎。第三方许可证及对应的 7-Zip 源码随仓库保留，详见 [第三方组件说明](docs/THIRD_PARTY.md)。
+归档浏览和常规解压使用 SharpCompress，压缩、加密归档解压及认证校验使用随附的官方 7-Zip 引擎。第三方许可证及对应的 7-Zip 源码随仓库保留，详见 [第三方组件说明](docs/THIRD_PARTY.md)。
 
 第三方组件保留各自的版权声明和许可证。

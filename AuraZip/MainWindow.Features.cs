@@ -184,7 +184,7 @@ public sealed partial class MainWindow
             StatusText.Text = T("就绪");
             return workspace.Path;
         }
-        catch { workspace.Dispose(); throw; }
+        catch (Exception ex) { if (ArchiveService.IsPasswordError(ex)) _password = null; workspace.Dispose(); throw; }
         finally { _opening?.Dispose(); _opening = null; BusyOverlay.Visibility = Visibility.Collapsed; _busy = false; UpdateCommands(); }
     }
 
@@ -246,33 +246,38 @@ public sealed partial class MainWindow
         catch (OperationCanceledException) { StatusText.Text = T("已取消"); }
         catch (Exception ex) { await ErrorAsync(T("复制文件"), ex); }
     }
-    private void FileList_DragItemsStarting(object sender, DragItemsStartingEventArgs e)
+    private IReadOnlyList<IStorageItem>? _readyDragItems;
+    private Func<Task<DataPackageOperation>>? _restartFileDrag;
+    private bool _preparingDrag, _dragUsesMouse;
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
+
+    private async void FileList_DragStarting(UIElement sender, DragStartingEventArgs e)
     {
-        if (_busy || _dialogOpen || _index is null) { e.Cancel = true; return; }
-        var keys = e.Items.OfType<ArchiveItem>().Select(i => i.Key).ToArray();
-        if (keys.Length == 0) { e.Cancel = true; return; }
+        e.AllowedOperations = DataPackageOperation.Copy;
+        e.Data.RequestedOperation = DataPackageOperation.Copy;
+        if (_readyDragItems is not null) { e.Data.SetStorageItems(_readyDragItems); return; }
+        // DragStarting deferrals delay the drag visual, not publication of data formats.
+        // Prepare files first, then start a new drag with a complete native file package.
+        e.Cancel = true;
+        if (_preparingDrag || _restartFileDrag is null) return;
+        var keys = FileList.SelectedItems.OfType<ArchiveItem>().Select(i => i.Key).ToArray();
+        if (keys.Length == 0) return;
         var index = _index;
         var folder = _currentPath;
-        e.Data.RequestedOperation = DataPackageOperation.Copy;
-        // ListView owns selection and drag gestures; materialize only when the target asks for files.
-        e.Data.SetDataProvider(StandardDataFormats.StorageItems, request =>
+        var restart = _restartFileDrag;
+        _preparingDrag = true;
+        try
         {
-            var deferral = request.GetDeferral();
-            if (!DispatcherQueue.TryEnqueue(async () =>
-            {
-                try
-                {
-                    if (!ReferenceEquals(_index, index) || _currentPath != folder || _busy || _dialogOpen)
-                    { request.SetData(Array.Empty<IStorageItem>()); return; }
-                    var items = await ExportSelectionAsync(keys, showOverlay: false);
-                    request.SetData(items);
-                    if (items.Count > 0) StatusText.Text = T("文件已准备，可拖放到目标位置。");
-                }
-                catch (OperationCanceledException) { request.SetData(Array.Empty<IStorageItem>()); StatusText.Text = T("已取消"); }
-                catch (Exception ex) { request.SetData(Array.Empty<IStorageItem>()); StatusText.Text = ex.Message; }
-                finally { deferral.Complete(); }
-            })) deferral.Complete();
-        });
+            if (index is null || _busy || _dialogOpen) return;
+            var items = await ExportSelectionAsync(keys, showOverlay: false);
+            if (items.Count == 0 || !ReferenceEquals(_index, index) || _currentPath != folder || (_dragUsesMouse && (GetAsyncKeyState(1) & 0x8000) == 0)) return;
+            _readyDragItems = items;
+            StatusText.Text = T("文件已准备，可拖放到目标位置。");
+            await restart();
+        }
+        catch (OperationCanceledException) { StatusText.Text = T("已取消"); }
+        catch (Exception ex) { StatusText.Text = T(ex.Message); }
+        finally { _readyDragItems = null; _preparingDrag = false; }
     }
 
     private async Task UpdateZipAsync(IReadOnlyList<string>? additions = null, bool delete = false, bool rename = false)

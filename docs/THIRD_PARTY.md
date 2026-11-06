@@ -11,7 +11,7 @@ AuraZip 自有代码与文档采用 [GNU GPL v3.0 or later](../LICENSE)。以下
 
 ## 7-Zip
 
-- 用途：作为外部进程创建压缩包。
+- 用途：作为外部进程创建压缩包，并完成加密归档解压、预览及完整性和认证校验。
 - 来源：[官方 7-Zip 26.05 发布](https://github.com/ip7z/7zip/releases/tag/26.05)。
 - 未修改的 x86、x64、ARM64 引擎位于 `AuraZip/Engine/`。
 - 许可证、LGPL 文本和该版本对应源码位于 [`AuraZip/ThirdParty/7zip/`](../AuraZip/ThirdParty/7zip/)。

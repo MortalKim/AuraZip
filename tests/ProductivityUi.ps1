@@ -41,7 +41,7 @@ Check 'PDF renders its first page' { (Find 'PdfPageNumber' -Id).Current.Name -eq
 Invoke (Find 'PdfNext' -Id)
 Check 'PDF next page renders' { (Find 'PdfPageNumber' -Id).Current.Name -eq '2 / 2' }
 SelectFile 'audio.wav'
-Check 'audio has native playback controls without automatic playback' { $play=Find 'PlayPauseButton' -Id; $play -and !$play.Current.IsOffscreen -and $play.Current.Name -eq '播放' }
+Check 'audio has native playback controls without automatic playback' { $play=Find 'PlayPauseButton' -Id; $play -and !$play.Current.IsOffscreen -and $play.Current.Name -in @('Play','播放') }
 SelectFile 'hash.txt'
 Tool '文件哈希'
 Check 'hash dialog reports real SHA-256 and MD5' { $null -ne (Find '比对哈希（可选）') }

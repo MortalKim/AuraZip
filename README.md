@@ -84,6 +84,6 @@ Copyright (C) 2026 AuraZip contributors.
 
 AuraZip is licensed under the **GNU General Public License v3.0 or later (GPL-3.0-or-later)**. You may use, modify, and redistribute the project under its terms. See [LICENSE](LICENSE) for the full license text.
 
-AuraZip uses SharpCompress for archive reading and the bundled official 7-Zip engine for compression. Third-party license notices and the corresponding 7-Zip source are included in the repository. See [third-party components](docs/THIRD_PARTY.md) for details.
+AuraZip uses SharpCompress for archive browsing and general extraction, and the bundled official 7-Zip engine for compression, encrypted archive extraction, and authentication checks. Third-party license notices and the corresponding 7-Zip source are included in the repository. See [third-party components](docs/THIRD_PARTY.md) for details.
 
 Third-party components retain their respective copyright notices and licenses.

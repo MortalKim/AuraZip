@@ -19,7 +19,7 @@ public sealed partial class ArchiveService
         var volumes = ArchiveFormats.Volumes(path);
         var items = new Dictionary<string, ArchiveItem>(StringComparer.Ordinal);
         using var source = File.OpenRead(path);
-        bool zip = IsZip(source);
+        bool zip = IsZip(source), rar = IsRar(source), sevenZip = IsSevenZip(source), compressedStream = IsCompressedStream(source);
         void AddEntry(IEntry e)
         {
             token.ThrowIfCancellationRequested();
@@ -33,18 +33,33 @@ public sealed partial class ArchiveService
             }
             int? attributes = null;
             try { attributes = e.Attrib; } catch (NotImplementedException) { }
-            items[key] = new(key, e.IsDirectory, e.Size, e.CompressedSize, e.LastModifiedTime, e.IsEncrypted, !e.IsDirectory && (zip || e.Crc != 0) && !(e.IsEncrypted && e.Crc == 0) ? unchecked((uint)e.Crc) : null, attributes, !string.IsNullOrEmpty(e.LinkTarget));
+            // RAR5 can key its stored checksums to the password. Encrypted RAR data
+            // is verified by the bundled engine rather than compared to a plain CRC.
+            items[key] = new(key, e.IsDirectory, e.Size, e.CompressedSize, e.LastModifiedTime, e.IsEncrypted, !e.IsDirectory && !(rar && e.IsEncrypted) && (zip || e.Crc != 0) && !(e.IsEncrypted && e.Crc == 0) ? unchecked((uint)e.Crc) : null, attributes, !string.IsNullOrEmpty(e.LinkTarget));
         }
-        if (zip || IsSevenZip(source) || (volumes.Count > 1 && IsRar(source)))
+        try
         {
-            using var owned = new OwnedArchive(volumes, password, codePage);
-            foreach (var entry in owned.Archive.Entries) AddEntry(entry);
+            if (zip || sevenZip || (volumes.Count > 1 && rar))
+            {
+                using var owned = new OwnedArchive(volumes, password, codePage);
+                foreach (var entry in owned.Archive.Entries) AddEntry(entry);
+            }
+            else
+            {
+                using var combined = volumes.Count > 1 ? new VolumeReadStream(volumes) : null;
+                using var reader = ReaderFactory.Open(combined ?? (Stream)source, ReadOptions(password, codePage));
+                if (reader is SharpCompress.Readers.GZip.GZipReader) return ReadSingleStreamIndex(path, token, codePage);
+                while (reader.MoveToNextEntry()) AddEntry(reader.Entry);
+            }
         }
-        else
+        catch (Exception ex) when (compressedStream && ex is InvalidFormatException or ArgumentNullException)
+        { return ReadSingleStreamIndex(path, token, codePage); }
+        catch (InvalidFormatException) when ((rar || sevenZip) && !string.IsNullOrEmpty(password))
         {
-            using var combined = volumes.Count > 1 ? new VolumeReadStream(volumes) : null;
-            using var reader = ReaderFactory.Open(combined ?? (Stream)source, ReadOptions(password, codePage));
-            while (reader.MoveToNextEntry()) AddEntry(reader.Entry);
+            // RAR4 and 7z can report bad header decryption as a format/CRC error.
+            // Ask the engine to distinguish it from bad data.
+            CheckHeaderPassword(path, password, token);
+            throw;
         }
         return new ArchiveIndex(Path.GetFullPath(path), items.Values.ToList(), codePage);
     }, token);
@@ -109,11 +124,12 @@ public sealed partial class ArchiveService
         var count = stream.Read(signature); stream.Position = position;
         return count == 4 && signature.SequenceEqual(new byte[] { 0x52, 0x61, 0x72, 0x21 });
     }
-    private sealed class ReaderSession(IReader? reader = null, IArchive? archive = null, Stream? stream = null, IDisposable? owner = null) : IDisposable
+    private sealed class ReaderSession(IReader? reader = null, IArchive? archive = null, Stream? stream = null, IDisposable? owner = null, bool zip = false) : IDisposable
     {
         private readonly IEnumerator<IArchiveEntry>? _entries = reader is null ? archive!.Entries.GetEnumerator() : null;
         public ReaderSession Reader => this;
         public IEntry Entry => reader?.Entry ?? _entries!.Current;
+        public bool HasPlainCrc => zip || Entry.Crc != 0;
         public bool MoveToNextEntry() => reader?.MoveToNextEntry() ?? _entries!.MoveNext();
         public Stream OpenEntryStream() => reader?.OpenEntryStream() ?? _entries!.Current.OpenEntryStream();
         public void Dispose() { try { _entries?.Dispose(); reader?.Dispose(); if (owner is null) archive?.Dispose(); } finally { owner?.Dispose(); stream?.Dispose(); } }
@@ -130,7 +146,7 @@ public sealed partial class ArchiveService
         var source = File.OpenRead(path);
         try
         {
-            if (!IsSevenZip(source) && parts.Count == 1) return new ReaderSession(ReaderFactory.Open(source, ReadOptions(password, codePage)), stream: source);
+            if (!IsSevenZip(source) && !IsZip(source) && parts.Count == 1) return new ReaderSession(ReaderFactory.Open(source, ReadOptions(password, codePage)), stream: source);
             if (!IsSevenZip(source) && !IsZip(source) && !IsRar(source))
             {
                 source.Dispose();
@@ -141,7 +157,7 @@ public sealed partial class ArchiveService
             source.Dispose();
             var owned = new OwnedArchive(parts, password, codePage);
             var archive = owned.Archive;
-            try { return archive.IsSolid || archive.Type == ArchiveType.SevenZip ? new ReaderSession(archive.ExtractAllEntries(), archive, owner: owned) : new ReaderSession(archive: archive, owner: owned); }
+            try { return archive.IsSolid || archive.Type == ArchiveType.SevenZip ? new ReaderSession(archive.ExtractAllEntries(), archive, owner: owned) : new ReaderSession(archive: archive, owner: owned, zip: archive.Type == ArchiveType.Zip); }
             catch { owned.Dispose(); throw; }
         }
         catch { source.Dispose(); throw; }
@@ -202,6 +218,7 @@ public sealed partial class ArchiveService
             SafeOutputPath(target, RelativeKey(item.Key, relativeRoot));
             if (item.IsLink) throw new InvalidDataException($"Symbolic-link entries are not supported: {item.Key}");
         }
+        if (NeedsVerifiedRead(index)) return ExtractVerifiedArchive(index, target, scope, policy, password, control, progress, token, relativeRoot);
         EnsureSpace(target, scope.Where(e => !e.IsDirectory).Sum(e => e.Size));
         CheckReparsePoints(target);
         Directory.CreateDirectory(target);
@@ -282,6 +299,13 @@ public sealed partial class ArchiveService
 
     public Task<byte[]> ReadPreviewAsync(string path, string key, string? password, int limit = 1024 * 1024, CancellationToken token = default, int? codePage = null) => Task.Run(() =>
     {
+        if (NeedsVerifiedPreview(path, password)) return ReadVerifiedPreview(path, key, password, limit, token, codePage);
+        using (var signature = File.OpenRead(ArchiveFormats.FirstVolume(path)))
+            if (IsCompressedStream(signature))
+            {
+                var index = OpenAsync(path, password, token, codePage).GetAwaiter().GetResult();
+                if (index.IsSingleStream) return ReadVerifiedPreview(path, key, password, limit, token, codePage, index);
+            }
         using var session = OpenSession(path, password, codePage);
         var reader = session.Reader;
         while (reader.MoveToNextEntry())
@@ -291,13 +315,16 @@ public sealed partial class ArchiveService
             if (reader.Entry.Size > limit) throw new InvalidOperationException($"Preview is limited to {ArchiveItem.FormatSize(limit)}. Extract the file to view it.");
             using var input = reader.OpenEntryStream();
             using var output = new MemoryStream();
+            var checksum = new Crc32();
             var buffer = new byte[8192];
             int count;
             while ((count = input.Read(buffer, 0, Math.Min(buffer.Length, limit + 1 - (int)output.Length))) > 0)
             {
-                token.ThrowIfCancellationRequested(); output.Write(buffer, 0, count);
+                token.ThrowIfCancellationRequested(); output.Write(buffer, 0, count); checksum.Append(buffer, count);
                 if (output.Length > limit) throw new InvalidOperationException("File exceeds the preview size limit.");
             }
+            if (!reader.Entry.IsEncrypted && reader.HasPlainCrc)
+                checksum.Validate(new ArchiveItem(key, false, reader.Entry.Size, expectedCrc: unchecked((uint)reader.Entry.Crc)), key, output.Length);
             return output.ToArray();
         }
         throw new FileNotFoundException("The archive entry is no longer available.", key);
@@ -305,6 +332,11 @@ public sealed partial class ArchiveService
 
     public Task TestAsync(ArchiveIndex index, string? password, OperationControl control, IProgress<ArchiveProgress> progress, CancellationToken token) => Task.Run(() =>
     {
+        if (NeedsVerifiedRead(index))
+        {
+            RunReadEngine("t", index, password, control, progress, token);
+            return;
+        }
         var metadata = index.Items.ToDictionary(i => i.Key, StringComparer.Ordinal);
         using var session = OpenSession(index.FilePath, password, index.CodePage);
         var reader = session.Reader;
@@ -326,7 +358,7 @@ public sealed partial class ArchiveService
 
     public Task CreateZipAsync(string destination, IReadOnlyList<string> paths, OperationControl control, IProgress<ArchiveProgress> progress, CancellationToken token, bool overwriteExisting = false) => Task.Run(() =>
     {
-        var entries = SourceEntries(paths, Path.GetFullPath(destination)).ToList();
+        var entries = SourceEntries(paths, Path.GetFullPath(destination), token).ToList();
         if (entries.Select(e => e.Key).Distinct(StringComparer.OrdinalIgnoreCase).Count() != entries.Count) throw new IOException("Selected items have duplicate names.");
         long total = entries.Where(e => !e.Directory).Sum(e => new FileInfo(e.Source).Length), bytes = 0;
         EnsureSpace(destination, total + 1024 * 1024);

@@ -48,7 +48,7 @@ public sealed partial class ArchiveService
                 if (Directory.Exists(path)) ClearDirectory(path);
                 else if (File.Exists(path)) { File.SetAttributes(path, FileAttributes.Normal); File.Delete(path); }
             }
-            var incoming = additions is null ? [] : SourceEntries(additions, index.FilePath).ToList();
+            var incoming = additions is null ? [] : SourceEntries(additions, index.FilePath, token).ToList();
             if (incoming.Select(e => e.Key).Distinct(StringComparer.OrdinalIgnoreCase).Count() != incoming.Count) throw new IOException("Selected items contain duplicate names.");
             foreach (var entry in incoming)
             {

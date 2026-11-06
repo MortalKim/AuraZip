@@ -54,8 +54,9 @@ function Change-Theme([string[]]$choice) {
     $selector.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     Start-Sleep -Milliseconds 150
     (Find-Name $choice).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
-    Check 'settings save button is available' { $null -ne (Find-Name @('保存','Save')) }
-    Invoke (Find-Name @('保存','Save'))
+    Check 'settings save button is available' { $button=Find-Id 'PrimaryButton'; $button -and !$button.Current.IsOffscreen -and $button.Current.IsEnabled }
+    Invoke (Find-Id 'PrimaryButton')
+    Check 'settings dialog has closed' { $button=Find-Id 'PrimaryButton'; !$button -or $button.Current.IsOffscreen }
     Start-Sleep -Milliseconds 300
 }
 $restoreTheme=$null
@@ -87,7 +88,8 @@ try {
     Capture 'dark'
     Write-Output "PASS light/dark and narrow/wide review captures: $output"
 } finally {
-    if (Find-Id 'ThemeSelector') { Invoke (Find-Name @('取消','Cancel')); Start-Sleep -Milliseconds 200 }
+    $close=Find-Id 'CloseButton'
+    if ($close -and !$close.Current.IsOffscreen) { Invoke $close; Start-Sleep -Milliseconds 300 }
     if ($restoreTheme) { Change-Theme @($restoreTheme) }
     $window.GetCurrentPattern([System.Windows.Automation.TransformPattern]::Pattern).Resize($original.Width,$original.Height)
 }

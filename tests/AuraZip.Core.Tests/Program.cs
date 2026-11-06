@@ -6,7 +6,7 @@ using AuraZip.Core;
 
 var root = Path.Combine(Path.GetTempPath(), "AuraZip-check-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);
-var service = new ArchiveService();
+var service = new ArchiveService(Path.GetFullPath("AuraZip/Engine/x64/7z.exe"));
 var progress = new DirectProgress();
 int checks = 0;
 void Check(bool condition, string name) { if (!condition) throw new Exception("FAILED: " + name); Console.WriteLine("PASS " + name); checks++; }
@@ -77,6 +77,8 @@ try
     await Reject(() => service.ExtractAsync(corruptIndex, corruptOutput, null, ConflictPolicy.Fail, null, control, progress, default), "corrupt data is rejected before committing the output file");
     Check(!File.Exists(Path.Combine(corruptOutput, "bad.txt")) && !Directory.EnumerateFiles(corruptOutput).Any(), "failed extraction removes its temporary file");
     var fixtureFolder = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../tests/Fixtures"));
+    await SystematicChecks.Run(service, root, Check, Reject);
+    await EncryptedReadChecks.Run(service, root, fixtureFolder, Check, Reject);
     foreach (var fixture in Directory.EnumerateFiles(fixtureFolder, "*.rar").Where(p => string.Equals(ArchiveFormats.FirstVolume(p), p, StringComparison.OrdinalIgnoreCase)))
     {
         var rar = await service.OpenAsync(fixture);
@@ -117,6 +119,40 @@ try
         }
     }
     var engine = new ArchiveService(Path.GetFullPath("AuraZip/Engine/x64/7z.exe"));
+    var manySource = Path.Combine(root, "many-input"); Directory.CreateDirectory(manySource);
+    for (int i = 0; i < 115; i++) File.WriteAllText(Path.Combine(manySource, $"文件-{i:D3}.txt"), new string((char)('a' + i % 26), 8192));
+    bool destinationWorkspaceObserved = false, directInputObserved = false;
+    var observed = new RecordingProgress(p =>
+    {
+        var staging = Directory.GetDirectories(root, ".aurazip-*.tmp").SingleOrDefault();
+        destinationWorkspaceObserved |= staging is not null;
+        if (staging is not null && p.Stage == ArchiveOperationStage.Compressing)
+            directInputObserved |= !Directory.Exists(Path.Combine(staging, "input"));
+    });
+    var manyTarget = Path.Combine(root, "many-output.zip");
+    await engine.CreateArchiveAsync(manyTarget, new[] { manySource }, new("zip"), control, observed, default);
+    Check(observed.Values.Any(p => p.Stage == ArchiveOperationStage.Compressing && p.FilesDone > 0 && p.FilesDone < 115), "multi-file compression reports intermediate completed file counts");
+    Check(observed.Values.Last() is { FilesDone: 115, TotalFiles: 115 } && observed.Values.Zip(observed.Values.Skip(1)).All(pair => pair.First.BytesDone <= pair.Second.BytesDone && pair.First.FilesDone <= pair.Second.FilesDone), "compression progress and file counts are monotonic and finish at the actual totals");
+    Check((await engine.OpenAsync(manyTarget)).Items.Count(i => !i.IsDirectory) == 115 && !Directory.GetDirectories(root, ".aurazip-*.tmp").Any(), "115-file compression commits all entries and removes destination staging");
+    Check(destinationWorkspaceObserved && directInputObserved, "compression stages beside the destination and reads ordinary selections directly");
+    using (var liveCancel = new CancellationTokenSource())
+    {
+        var cancelledTarget = Path.Combine(root, "live-cancel.zip");
+        var originalBytes = new byte[] { 1, 2, 3, 4 }; File.WriteAllBytes(cancelledTarget, originalBytes);
+        var cancelProgress = new RecordingProgress(p => { if (p.Stage == ArchiveOperationStage.Compressing && p.FilesDone > 0) liveCancel.Cancel(); });
+        await Reject(() => engine.CreateArchiveAsync(cancelledTarget, new[] { manySource }, new("zip"), control, cancelProgress, liveCancel.Token, overwrite: true), "cancellation during compression stops the engine");
+        Check(File.ReadAllBytes(cancelledTarget).SequenceEqual(originalBytes) && !Directory.GetDirectories(root, ".aurazip-*.tmp").Any(), "engine cancellation preserves an existing destination and cleans staged output");
+    }
+    var nestedTarget = Path.Combine(manySource, "inside.zip");
+    await engine.CreateArchiveAsync(nestedTarget, new[] { manySource }, new("zip"), control, progress, default);
+    var nestedCreated = await engine.OpenAsync(nestedTarget);
+    Check(nestedCreated.Items.Count(i => !i.IsDirectory) == 115 && !nestedCreated.Items.Any(i => i.Key.Contains(".aurazip-") || i.Key.EndsWith("inside.zip")), "output inside the source folder excludes temporary and output archives");
+    var mixedA = Path.Combine(root, "mixed-a"); var mixedB = Path.Combine(root, "mixed-b");
+    Directory.CreateDirectory(mixedA); Directory.CreateDirectory(mixedB);
+    File.WriteAllText(Path.Combine(mixedA, "a.txt"), "a"); File.WriteAllText(Path.Combine(mixedB, "b.txt"), "b");
+    var mixedTarget = Path.Combine(root, "mixed-output.zip");
+    await engine.CreateArchiveAsync(mixedTarget, new[] { Path.Combine(mixedA, "a.txt"), Path.Combine(mixedB, "b.txt") }, new("zip"), control, progress, default);
+    Check((await engine.OpenAsync(mixedTarget)).Items.Select(i => i.Key).Order().SequenceEqual(new[] { "a.txt", "b.txt" }), "mixed-parent selections preserve entry names");
     var folderSource = Path.Combine(root, "folder"); Directory.CreateDirectory(Path.Combine(folderSource, "empty", "nested"));
     File.WriteAllText(Path.Combine(folderSource, "file.txt"), "mixed input");
     var emptyZip = Path.Combine(root, "empty-folder.zip");
@@ -265,4 +301,10 @@ sealed class DirectProgress : IProgress<ArchiveProgress>
 {
     public ArchiveProgress? Last { get; private set; }
     public void Report(ArchiveProgress value) => Last = value;
+}
+
+sealed class RecordingProgress(Action<ArchiveProgress>? callback = null) : IProgress<ArchiveProgress>
+{
+    public List<ArchiveProgress> Values { get; } = new();
+    public void Report(ArchiveProgress value) { Values.Add(value); callback?.Invoke(value); }
 }

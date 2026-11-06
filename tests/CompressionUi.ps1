@@ -42,6 +42,8 @@ foreach($format in $formats){
     ([System.Windows.Automation.ValuePattern]$field.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue($output)
     Invoke (Find '压缩' -Type ([System.Windows.Automation.ControlType]::Button))
     Check "$format compression finishes" { $null -ne (Find '压缩完成') }
+    Check "$format completion has a visible success banner" { $banner=Find 'OperationCompleted' -Id; $banner -and !$banner.Current.IsOffscreen }
+    Check "$format completion shows final file totals" { (Find 'OperationFileCount' -Id).Current.Name -like '1 / 1 *' }
     Check "$format real output exists" { Test-Path -LiteralPath $output }
     Check 'completed compression reports original size, packed size and ratio' { @($script:window.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) | Where-Object { $_.Current.Name -like '*压缩率：*' }).Count -gt 0}
     Invoke (Find '关闭' -Type ([System.Windows.Automation.ControlType]::Button))

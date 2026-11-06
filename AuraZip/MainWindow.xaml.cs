@@ -51,6 +51,18 @@ public sealed partial class MainWindow : Window
     {
         Strings.SetLanguage(_settings.Language);
         InitializeComponent();
+        FileList.DragStarting += FileList_DragStarting;
+        FileList.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, args) =>
+        {
+            var point = args.GetCurrentPoint(null);
+            _dragUsesMouse = point.PointerDeviceType.ToString() == "Mouse";
+            _restartFileDrag = async () => await FileList.StartDragAsync(point);
+        }), true);
+        FileList.ContainerContentChanging += (_, e) =>
+        {
+            e.ItemContainer.DragStarting -= FileList_DragStarting;
+            if (!e.InRecycleQueue) e.ItemContainer.DragStarting += FileList_DragStarting;
+        };
         InitializeExternalEditing();
         SearchAllMenu.RegisterPropertyChangedCallback(ToggleMenuFlyoutItem.IsCheckedProperty, (_, _) => SearchAllChanged());
         _wideFileTemplate = FileList.ItemTemplate;
@@ -162,10 +174,10 @@ public sealed partial class MainWindow : Window
             while (true)
             {
                 try { archive = await _archives.OpenAsync(path, password, _opening.Token, _codePage); break; }
-                catch (Exception ex) when (ex.Message.Contains("password", StringComparison.OrdinalIgnoreCase) || ex.Message.Contains("encrypted", StringComparison.OrdinalIgnoreCase) || ex is System.Security.Cryptography.CryptographicException)
+                catch (Exception ex) when (ArchiveService.IsPasswordError(ex))
                 {
                     BusyOverlay.Visibility = Visibility.Collapsed;
-                    password = await AskPasswordAsync();
+                    password = await AskPasswordAsync(password is not null);
                     if (password is null) { if (_batchMode) _stopShellBatch = true; return; }
                     BusyOverlay.Visibility = Visibility.Visible;
                 }
@@ -322,7 +334,14 @@ public sealed partial class MainWindow : Window
             }
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { if (!token.IsCancellationRequested) PreviewText.Text = T("Preview unavailable: ") + ex.Message + T(" Extract the file to view it."); }
+        catch (Exception ex)
+        {
+            if (!token.IsCancellationRequested)
+            {
+                if (ReferenceEquals(_index, index) && ArchiveService.IsPasswordError(ex)) _password = null;
+                PreviewText.Text = T("Preview unavailable: ") + T(ex.Message) + T(" Extract the file to view it.");
+            }
+        }
     }
 
     private async Task ExtractAsync(string? quickMode = null)
@@ -419,6 +438,7 @@ public sealed partial class MainWindow : Window
             var operationDialog = new OperationDialog();
             var success = await operationDialog.RunAsync(Root.XamlRoot, T("正在解压"), index.Name, target,
                 async (control, progress, token) => { outcome = await _archives.ExtractAsync(index, target, scope, policy, _password, control, progress, token, scope is null ? "" : SelectionRoot); }, openAfter.IsChecked == true, autoClose: _batchMode);
+            if (operationDialog.LastError is { } error && ArchiveService.IsPasswordError(error)) _password = null;
             StatusText.Text = success ? F("已解压 {0} 个文件，跳过 {1} 个文件 · {2}", outcome?.FilesWritten, outcome?.FilesSkipped, target) : T("Extraction did not finish. Check the operation result before retrying.");
             _stopShellBatch = operationDialog.WasCancelled;
             if (_batchMode) _batchResults.Add(index.Name + "\n" + (success ? StatusText.Text : operationDialog.LastError?.Message ?? T("已取消")));
@@ -443,6 +463,7 @@ public sealed partial class MainWindow : Window
         {
             var operation = new OperationDialog();
             bool success = await operation.RunAsync(Root.XamlRoot, T("正在测试"), _index.Name, null, (control, progress, token) => _archives.TestAsync(_index, _password, control, progress, token), autoClose: _batchMode);
+            if (operation.LastError is { } error && ArchiveService.IsPasswordError(error)) _password = null;
             _stopShellBatch = operation.WasCancelled;
             if (_batchMode) _batchResults.Add(_index.Name + "\n" + (success ? T("文件数据读取完成，未发现错误。") : operation.LastError?.Message ?? T("已取消")));
         }
@@ -525,10 +546,14 @@ public sealed partial class MainWindow : Window
         await ShowMessageAsync(T("属性"), text);
     }
 
-    private async Task<string?> AskPasswordAsync()
+    private async Task<string?> AskPasswordAsync(bool retry = false)
     {
         var field = new PasswordBox { Header = T("压缩包密码"), MinWidth = Math.Min(320, Math.Max(200, Root.ActualWidth - 80)) };
-        var dialog = new ContentDialog { XamlRoot = Root.XamlRoot, Title = T("输入密码"), Content = field, PrimaryButtonText = T("打开"), CloseButtonText = T("取消"), DefaultButton = ContentDialogButton.Primary };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(field, "ArchivePassword");
+        var panel = new StackPanel { Spacing = 12 }; panel.Children.Add(field);
+        if (retry) panel.Children.Add(new TextBlock { Text = T("密码错误或加密数据已损坏，请重新输入密码。"), TextWrapping = TextWrapping.Wrap, MaxWidth = 360 });
+        var dialog = new ContentDialog { XamlRoot = Root.XamlRoot, Title = T("输入密码"), Content = panel, PrimaryButtonText = T("打开"), CloseButtonText = T("取消"), DefaultButton = ContentDialogButton.Primary, IsPrimaryButtonEnabled = false };
+        field.PasswordChanged += (_, _) => dialog.IsPrimaryButtonEnabled = field.Password.Length > 0;
         _dialogOpen = true;
         try { return await dialog.ShowAsync() == ContentDialogResult.Primary ? field.Password : null; }
         finally { _dialogOpen = false; }
@@ -577,7 +602,7 @@ public sealed partial class MainWindow : Window
         // Finish the routed gesture before navigation replaces the item containers.
         DispatcherQueue.TryEnqueue(() => { if (ReferenceEquals(_index, index)) _ = OpenItemAsync(item); });
     }
-    private void FileList_KeyDown(object sender, KeyRoutedEventArgs e) { if (_dialogOpen || _busy) return; if (e.Key == VirtualKey.Enter && !e.KeyStatus.IsMenuKeyDown) { e.Handled = true; OpenSelected(); } else if (e.Key == VirtualKey.Delete) { e.Handled = true; _ = UpdateZipAsync(delete: true); } else if (e.Key == VirtualKey.F2) { e.Handled = true; _ = UpdateZipAsync(rename: true); } else if (e.Key == VirtualKey.Back) { e.Handled = true; Up(); } }
+    private void FileList_KeyDown(object sender, KeyRoutedEventArgs e) { if (e.Key == VirtualKey.Escape && _opening is not null) { e.Handled = true; _opening.Cancel(); return; } if (_dialogOpen || _busy) return; if (e.Key == VirtualKey.Enter && !e.KeyStatus.IsMenuKeyDown) { e.Handled = true; OpenSelected(); } else if (e.Key == VirtualKey.Delete) { e.Handled = true; _ = UpdateZipAsync(delete: true); } else if (e.Key == VirtualKey.F2) { e.Handled = true; _ = UpdateZipAsync(rename: true); } else if (e.Key == VirtualKey.Back) { e.Handled = true; Up(); } }
     private void FileList_RightTapped(object sender, RightTappedRoutedEventArgs e)
     {
         var element = e.OriginalSource as FrameworkElement;
