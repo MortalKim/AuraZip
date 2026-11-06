@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Text.Json;
+using AuraZip.Core;
 
 namespace AuraZip.Services;
 
@@ -20,6 +21,27 @@ public sealed class Strings : INotifyPropertyChanged
 
     public static string T(string key) => (IsChinese ? Chinese : English).TryGetValue(key, out var value) ? value : key;
     public static string F(string key, params object?[] args) => string.Format(CultureInfo.CurrentCulture, T(key), args);
+    public static string DescribeError(Exception error)
+    {
+        if (error is NestedArchiveRecoveryException recovery)
+            return F("保存未完成，恢复文件已保留在以下目录：\n{0}", string.Join(Environment.NewLine, recovery.RecoveryDirectories));
+        if (error is RarEncoderException rar)
+        {
+            var explanation = rar.ExitCode switch
+            {
+                1 => T("RAR 操作出现警告，未保存结果。"),
+                3 or 13 => T("RAR 数据已损坏，未保存修改。"),
+                4 => T("此 RAR 已锁定，不能修改。"),
+                5 or 9 => T("RAR 无法写入目标文件，请检查可用空间和访问权限。"),
+                6 or 12 => T("RAR 无法读取源文件，请检查文件占用和访问权限。"),
+                8 => T("RAR 编码器内存不足。"),
+                10 => T("没有可供 RAR 处理的文件。"),
+                _ => T("RAR 编码器未能完成操作。")
+            };
+            return explanation + "\n" + F("错误代码：{0}", rar.ExitCode) + (rar.Details.Length == 0 ? "" : "\n" + rar.Details);
+        }
+        return T(error.Message);
+    }
 
     public static void SetLanguage(string preference)
     {

@@ -17,10 +17,11 @@ An open-source archive manager for Windows, built with WinUI 3. Browse archive c
 ## Features
 
 - Browse and extract ZIP, 7Z, RAR, TAR, and common compressed TAR formats, with support for multipart archives and passwords.
-- Create ZIP, 7Z, TAR, TAR.GZ, TAR.BZ2, and TAR.XZ archives. Set custom volume sizes in MB or GB, including decimal values.
+- Create ZIP, 7Z, TAR, TAR.GZ, TAR.BZ2, and TAR.XZ archives, with custom volume sizes in MB or GB. Compress individual files directly to GZ, BZ2, or XZ.
 - Smart extraction: extract a single top-level item directly, or create a folder named after the archive when it contains multiple top-level items.
-- Add, update, delete, and rename entries in single-volume ZIP and 7Z archives. Confirm and save externally edited files back into the archive.
-- Navigate with a folder tree and preview files with a single click, including text, images, PDF pages, Office document text, audio, and video.
+- Add, update, delete, and rename entries in single-volume ZIP and 7Z archives. Save nested edits through every containing ZIP or 7Z archive, and confirm externally edited files before saving them back.
+- Create and edit RAR archives using a separately installed WinRAR command-line encoder. RAR extraction works without WinRAR; RAR archives also support nested writeback when the encoder is available.
+- Navigate with a folder tree and preview text, images, PDF pages, Office documents, audio, and video. Office previews offer text and basic layout modes, document passwords, and legacy DOC/XLS/PPT support, with parsing isolated in a resource-limited process.
 - Keep previews visible below the file list in narrow windows, with a toolbar action to show or hide the pane.
 - Access modern Windows 11 and classic context-menu actions under a single AuraZip submenu.
 - Search across an archive with wildcards, copy or drag files out, test archive integrity, compare SHA-256 and MD5 hashes, and edit ZIP comments.
@@ -70,7 +71,7 @@ See the [development guide](docs/DEVELOPMENT.md) for build, test, and publishing
 | Path | Purpose |
 | --- | --- |
 | `AuraZip/` | WinUI 3 application, settings, localization, icons, and package manifest |
-| `AuraZip.Core/` | Archive reading, extraction, compression, editing, hashing, and Office text extraction |
+| `AuraZip.Core/` | Archive reading, extraction, compression, editing, hashing, and isolated Office text and layout parsing |
 | `AuraZip.Shell/` | Modern and classic File Explorer context-menu extensions |
 | `scripts/` | Build, launch, packaging, engine verification, icon, and sample-generation scripts |
 | `tests/` | Core, native-menu, and UI tests, with archive fixtures |

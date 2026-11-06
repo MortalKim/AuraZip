@@ -19,6 +19,13 @@ AuraZip 自有代码与文档采用 [GNU GPL v3.0 or later](../LICENSE)。以下
 
 7-Zip 分发条款包含 LGPL、BSD 声明与 unRAR 限制，应保留完整许可证与对应源码。应用打包时也会包含这些文件。
 
+## Office 预览
+
+- 用途：Office 文档解密、OLE 容器与旧版 XLS 缓存单元格值读取。DOC/PPT 当前正文和编辑记录由 AuraZip 按微软公开格式规范读取。
+- 组件、来源、固定版本与许可证见 [`Office 预览依赖声明`](../AuraZip/ThirdParty/OfficePreview/NOTICE.md)，许可文本随应用提供。
+- NPOI 使用 Apache-2.0 许可的 2.7.6 版本。预览不执行宏、不计算公式、不访问外部链接。
+- ImageSharp 与 NSax 不参与构建或运行时分发，构建检查会拒绝引入其运行时文件。
+
 ## Microsoft SDK 与运行时
 
 WinUI、Windows App SDK、Windows SDK 及相关 NuGet 组件遵循各自许可，依赖与版本见项目文件。

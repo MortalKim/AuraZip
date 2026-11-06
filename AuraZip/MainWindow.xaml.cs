@@ -39,7 +39,7 @@ public sealed partial class MainWindow : Window
     private bool _compactColumns;
     private bool _showNarrowPreview = true;
     private long _titleForegroundCallback;
-    public ObservableCollection<ArchiveItem> VisibleItems { get; } = new();
+    public ArchiveItemCollection VisibleItems { get; } = new();
     public ObservableCollection<FolderNode> FolderRoots { get; } = new();
     public string? InitialArchivePath { get; set; }
     public string? InitialShellAction { get; set; }
@@ -50,6 +50,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         Strings.SetLanguage(_settings.Language);
+        _archives.ConfigureRarEncoder(_settings.RarEncoderPath);
         InitializeComponent();
         FileList.DragStarting += FileList_DragStarting;
         FileList.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, args) =>
@@ -75,7 +76,7 @@ public sealed partial class MainWindow : Window
         var work = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Nearest).WorkArea;
         int width = Math.Min((int)(1180 * scale), work.Width - 40), height = Math.Min((int)(820 * scale), work.Height - 40);
         AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(work.X + (work.Width - width) / 2, work.Y + (work.Height - height) / 2, width, height));
-        Root.ActualThemeChanged += (_, _) => UpdateWindowTheme();
+        Root.ActualThemeChanged += (_, _) => { UpdateWindowTheme(); RenderOfficeLayout(); };
         _titleForegroundCallback = WindowTitle.RegisterPropertyChangedCallback(TextBlock.ForegroundProperty, (_, _) => UpdateWindowTheme());
         ApplyTheme(); UpdateWindowTheme();
         AddShortcut(VirtualKey.O, VirtualKeyModifiers.Control, async () => await PickArchiveAsync());
@@ -184,7 +185,8 @@ public sealed partial class MainWindow : Window
             }
             _previewCancellation?.Cancel();
             _index = archive; _password = password; _history.Clear(); _currentPath = ""; _query = ""; SearchBox.Text = "";
-            _settings.Remember(archive.FilePath);
+            if (!_temporary.Any(w => archive.FilePath.StartsWith(w.Path + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
+                _settings.Remember(archive.FilePath);
             WindowTitle.Text = Title = archive.Name + " — AuraZip";
             ArchiveSummary.Text = F("{0} 压缩文件 · {1} · {2} 个文件 · {3}", Path.GetExtension(path).TrimStart('.').ToUpperInvariant(), ArchiveItem.FormatSize(new FileInfo(path).Length), archive.Items.Count(i => !i.IsDirectory), archive.Directory);
             FormatStatus.Text = Path.GetExtension(path).TrimStart('.').ToUpperInvariant();
@@ -241,7 +243,7 @@ public sealed partial class MainWindow : Window
         var files = (global ? _index.Items : _index.Children(_currentPath)).Where(i => pattern is not null ? pattern.IsMatch(i.Name) || (global && pattern.IsMatch(i.Key)) : i.Name.Contains(_query, StringComparison.CurrentCultureIgnoreCase) || (global && i.Key.Contains(_query, StringComparison.CurrentCultureIgnoreCase)));
         Func<ArchiveItem, object?> order = _sort switch { "Size" => i => i.Size, "PackedSize" => i => i.PackedSize, "TypeText" => i => i.TypeText, "Modified" => i => i.Modified, _ => i => i.Name };
         var sorted = _descending ? files.OrderBy(i => !i.IsDirectory).ThenByDescending(order) : files.OrderBy(i => !i.IsDirectory).ThenBy(order);
-        FileList.SelectedItems.Clear(); VisibleItems.Clear(); foreach (var item in sorted) VisibleItems.Add(item);
+        FileList.SelectedItems.Clear(); VisibleItems.ReplaceAll(sorted);
         ListEmpty.Visibility = VisibleItems.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         ListEmpty.Text = _query.Length > 0 ? T("没有匹配的文件") : T("此文件夹为空");
         UpdateStatus(); UpdateCommands(); _ = UpdatePreviewAsync();
@@ -483,10 +485,44 @@ public sealed partial class MainWindow : Window
         var custom = new TextBox { Header = T("指定目录"), Text = _settings.CustomDirectory, Visibility = _settings.UseArchiveDirectory ? Visibility.Collapsed : Visibility.Visible };
         mode.SelectionChanged += (_, _) => custom.Visibility = mode.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
         var open = new CheckBox { Content = T("完成后打开目标文件夹"), IsChecked = _settings.OpenAfterExtraction };
+        var rar = new TextBox { Header = T("RAR 编码器（可选）"), Text = _settings.RarEncoderPath, PlaceholderText = T("自动检测已安装的 WinRAR，或选择 Rar.exe") };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(rar, "RarEncoderPath");
+        var chooseRar = new Button { Content = T("选择 Rar.exe…") };
+        chooseRar.Click += async (_, _) =>
+        {
+            try
+            {
+                var picker = new FileOpenPicker(); picker.FileTypeFilter.Add(".exe"); WinRT.Interop.InitializeWithWindow.Initialize(picker, Handle);
+                var file = await picker.PickSingleFileAsync(); if (file is not null) rar.Text = file.Path;
+            }
+            catch (Exception ex) { rar.Header = DescribeError(ex); }
+        };
         var panel = new StackPanel { Spacing = 18, MinWidth = Math.Min(360, Math.Max(200, Root.ActualWidth - 80)) }; panel.Children.Add(language); panel.Children.Add(theme); panel.Children.Add(mode); panel.Children.Add(custom); panel.Children.Add(open);
+        panel.Children.Add(rar); panel.Children.Add(chooseRar);
+        panel.Children.Add(new TextBlock { Text = T("RAR 创建和修改调用本机 WinRAR 编码器，需遵守其许可；RAR 解压无需安装 WinRAR。"), TextWrapping = TextWrapping.Wrap, MaxWidth = 360, FontSize = 12 });
         panel.Children.Add(new TextBlock { Text = T("压缩文件的操作收纳在 AuraZip 子菜单中。"), TextWrapping = TextWrapping.Wrap, MaxWidth = 360, FontSize = 12 });
+        var packageVersion = Windows.ApplicationModel.Package.Current.Id.Version;
+        var about = new StackPanel { Spacing = 4, Margin = new Thickness(0, 8, 0, 0) };
+        about.Children.Add(new TextBlock { Text = T("关于 AuraZip"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+        var version = new TextBlock
+        {
+            Text = F("版本 {0}", $"{packageVersion.Major}.{packageVersion.Minor}.{packageVersion.Build}.{packageVersion.Revision}"),
+            IsTextSelectionEnabled = true, TextWrapping = TextWrapping.Wrap,
+            Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
+        };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(version, "AppVersion");
+        about.Children.Add(version);
+        var github = new HyperlinkButton
+        {
+            Content = "GitHub · MortalKim/AuraZip", NavigateUri = new Uri("https://github.com/MortalKim/AuraZip"),
+            HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(0)
+        };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(github, "GitHubLink");
+        ToolTipService.SetToolTip(github, github.NavigateUri.AbsoluteUri);
+        about.Children.Add(github); panel.Children.Add(about);
         var dialog = new ContentDialog { XamlRoot = Root.XamlRoot, Title = T("设置"), Content = new ScrollViewer { Content = panel, MaxHeight = Math.Max(160, Root.ActualHeight - 180), HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }, PrimaryButtonText = T("保存"), CloseButtonText = T("取消"), DefaultButton = ContentDialogButton.Primary };
         dialog.PrimaryButtonClick += (_, e) => { if (mode.SelectedIndex == 1 && !Path.IsPathFullyQualified(custom.Text)) { e.Cancel = true; custom.Header = T("Enter an absolute directory path."); } };
+        dialog.PrimaryButtonClick += (_, e) => { if (!string.IsNullOrWhiteSpace(rar.Text) && !RarEncoder.IsEncoder(rar.Text.Trim())) { e.Cancel = true; rar.Header = T("请选择有效的 WinRAR 命令行编码器 Rar.exe。"); } };
         _dialogOpen = true;
         try
         {
@@ -494,6 +530,7 @@ public sealed partial class MainWindow : Window
             _settings.Theme = theme.SelectedIndex == 1 ? "Light" : theme.SelectedIndex == 2 ? "Dark" : "System";
             _settings.UseArchiveDirectory = mode.SelectedIndex == 0; _settings.CustomDirectory = custom.Text;
             _settings.OpenAfterExtraction = open.IsChecked == true;
+            _settings.RarEncoderPath = rar.Text.Trim(); _archives.ConfigureRarEncoder(_settings.RarEncoderPath);
             _settings.Language = language.SelectedIndex == 1 ? "zh-CN" : language.SelectedIndex == 2 ? "en-US" : "System";
             _settings.Save(); Strings.SetLanguage(_settings.Language); ApplyTheme(); RefreshLanguage();
         }
@@ -566,7 +603,7 @@ public sealed partial class MainWindow : Window
         try { await new ContentDialog { XamlRoot = Root.XamlRoot, Title = title, Content = new ScrollViewer { MaxHeight = Math.Max(180, Math.Min(420, Root.ActualHeight - 200)), Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, MaxWidth = 480 } }, CloseButtonText = T("关闭") }.ShowAsync(); }
         finally { _dialogOpen = false; }
     }
-    private Task ErrorAsync(string title, Exception ex) => ShowMessageAsync(title, ex.Message + T("\n\nCheck the file or destination and try again."));
+    private Task ErrorAsync(string title, Exception ex) => ShowMessageAsync(title, DescribeError(ex) + T("\n\nCheck the file or destination and try again."));
     private void Up() { if (_currentPath.Length == 0 && _parents.Count > 0) { ReturnToParentArchive(); return; } if (_currentPath.Length > 0) Navigate(_currentPath.Contains('/') ? _currentPath[.._currentPath.LastIndexOf('/')] : ""); }
     private void Back() { if (_history.TryPop(out var path)) Navigate(path, false); else if (_parents.Count > 0) ReturnToParentArchive(); }
     private async void OpenSelected() => await OpenSelectedAsync();
@@ -582,7 +619,11 @@ public sealed partial class MainWindow : Window
     private void SelectAll_Click(object sender, RoutedEventArgs e) { if (_index is not null) FileList.SelectAll(); }
     private void ClearSelection_Click(object sender, RoutedEventArgs e) => FileList.SelectedItems.Clear();
     private void TreeToggle_Click(object sender, RoutedEventArgs e) { _settings.ShowFolderPane = !_settings.ShowFolderPane; _settings.Save(); UpdateCommands(); }
-    private async void Help_Click(object sender, RoutedEventArgs e) => await ShowMessageAsync("AuraZip", T("Ctrl+O  打开压缩包\nCtrl+N  新建压缩包\nCtrl+C  复制文件\nF2  重命名\nDelete  删除\nCtrl+A  全选\nCtrl+F  搜索（支持 * 和 ?）\nAlt+E  解压到\nAlt+↑  上一级\nAlt+←  返回\nAlt+Enter  属性\n\n单击预览，双击使用默认应用打开文件，或进入文件夹和嵌套压缩包。\n支持 ZIP、7Z、RAR、TAR 等格式解压；创建 ZIP、7Z、TAR、TAR.GZ、TAR.BZ2、TAR.XZ；修改单卷 ZIP、7Z。ZIP/7Z 支持密码，全部创建格式支持分卷。工具菜单提供文件哈希、ZIP 注释和外部修改写回。\n\n解码：SharpCompress（MIT）。\n压缩：7-Zip（GNU LGPL 及 unRAR 限制）。\n许可与对应源码随应用提供，位于 ThirdParty/7zip。"));
+    private async void Help_Click(object sender, RoutedEventArgs e) => await ShowMessageAsync("AuraZip", string.Join("\n\n",
+        T("Ctrl+O  打开压缩包\nCtrl+N  新建压缩包\nCtrl+C  复制文件\nF2  重命名\nDelete  删除\nCtrl+A  全选\nCtrl+F  搜索（支持 * 和 ?）\nAlt+E  解压到\nAlt+↑  上一级\nAlt+←  返回\nAlt+Enter  属性"),
+        T("单击预览，双击打开文件或进入文件夹和嵌套压缩包。可修改的单卷压缩包支持逐层写回。工具菜单提供文件哈希、ZIP 注释和外部修改写回。"),
+        T("创建 ZIP、7Z、TAR 及 TAR 压缩格式，支持分卷；GZ、BZ2、XZ 用于单个文件。RAR 创建和修改需要本机 WinRAR 编码器，可在设置中选择 Rar.exe。"),
+        T("解码：SharpCompress（MIT）。压缩与验证：7-Zip（GNU LGPL 及 unRAR 限制）。许可与对应源码位于 ThirdParty/7zip。WinRAR 编码器不随应用分发，其使用遵守 WinRAR 许可。")));
     private void Back_Click(object sender, RoutedEventArgs e) => Back();
     private void Up_Click(object sender, RoutedEventArgs e) => Up();
     private void PathBar_ItemClicked(BreadcrumbBar sender, BreadcrumbBarItemClickedEventArgs args) { if (args.Item is PathCrumb crumb) { if (crumb.Key == "\0parent") ReturnToParentArchive(); else Navigate(crumb.Key); } }

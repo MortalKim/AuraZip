@@ -54,8 +54,9 @@ function Change-Theme([string[]]$choice) {
     $selector.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     Start-Sleep -Milliseconds 150
     (Find-Name $choice).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
-    Check 'settings save button is available' { $button=Find-Id 'PrimaryButton'; $button -and !$button.Current.IsOffscreen -and $button.Current.IsEnabled }
-    Invoke (Find-Id 'PrimaryButton')
+    Start-Sleep -Milliseconds 250
+    Check 'settings save button is available' { $script:themeSave=Find-Id 'PrimaryButton'; $themeSave -and !$themeSave.Current.IsOffscreen -and $themeSave.Current.IsEnabled }
+    Invoke $themeSave
     Check 'settings dialog has closed' { $button=Find-Id 'PrimaryButton'; !$button -or $button.Current.IsOffscreen }
     Start-Sleep -Milliseconds 300
 }

@@ -1,4 +1,4 @@
-﻿param()
+﻿param([ValidateSet('none','zip','7z')][string]$ContainingFormat='none')
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
@@ -10,7 +10,8 @@ Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; pu
 $fixture=Join-Path (Split-Path -Parent $PSScriptRoot) ('artifacts/ProductivityUi-'+[Guid]::NewGuid().ToString('N'))
 [void](New-Item -ItemType Directory -Path $fixture)
 $unique='AuraZip-edit-'+[Guid]::NewGuid().ToString('N')+'.txt'
-$archivePath=Join-Path $fixture 'productivity.zip'
+$archivePath=Join-Path $fixture ('productivity-'+[Guid]::NewGuid().ToString('N')+'.zip')
+$childName=Split-Path -Leaf $archivePath
 function ZipText($archive,$name,$text){$entry=$archive.CreateEntry($name);$writer=[IO.StreamWriter]::new($entry.Open(),[Text.UTF8Encoding]::new($false));$writer.Write($text);$writer.Dispose()}
 $doc=[IO.MemoryStream]::new();$z=[IO.Compression.ZipArchive]::new($doc,[IO.Compression.ZipArchiveMode]::Create,$true)
 ZipText $z 'word/document.xml' '<document><p><t>AuraZip Office preview verified</t></p></document>';$z.Dispose()
@@ -25,7 +26,14 @@ $writer.Write([Text.Encoding]::ASCII.GetBytes('RIFF'));$writer.Write([int]16036)
 $z=[IO.Compression.ZipFile]::Open($archivePath,[IO.Compression.ZipArchiveMode]::Create)
 ZipText $z $unique 'original external edit'; ZipText $z 'hash.txt' 'abc'
 foreach($pair in @(@('document.docx',$doc.ToArray()),@('pages.pdf',[Text.Encoding]::ASCII.GetBytes($pdf)),@('audio.wav',$wav.ToArray()))){$entry=$z.CreateEntry($pair[0]);$s=$entry.Open();$s.Write($pair[1],0,$pair[1].Length);$s.Dispose()};$z.Dispose();$doc.Dispose();$writer.Dispose();$wav.Dispose()
-$app=Start-AuraZipTestProcess ('"'+$archivePath+'"')
+$launchPath=$archivePath
+$engine=Join-Path (Split-Path -Parent $PSScriptRoot) 'AuraZip/Engine/x64/7z.exe'
+if($ContainingFormat -ne 'none'){
+    $launchPath=Join-Path $fixture ('outer.'+$ContainingFormat)
+    & $engine a ('-t'+$ContainingFormat) $launchPath $archivePath | Out-Null
+    if($LASTEXITCODE -ne 0){throw 'Containing archive fixture creation failed.'}
+}
+$app=Start-AuraZipTestProcess ('"'+$launchPath+'"')
 $window=[System.Windows.Automation.AutomationElement]::FromHandle($app.MainWindowHandle)
 [void][ProductivityUiNative]::SetForegroundWindow($app.MainWindowHandle)
 function Find([string]$value,[switch]$Id,$Type){$prop=if($Id){[System.Windows.Automation.AutomationElement]::AutomationIdProperty}else{[System.Windows.Automation.AutomationElement]::NameProperty};$c=[System.Windows.Automation.PropertyCondition]::new($prop,$value);if($Type){$c=[System.Windows.Automation.AndCondition]::new($c,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type))};$window.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$c)}
@@ -34,6 +42,14 @@ function Check($label,[scriptblock]$test){for($i=0;$i -lt 150;$i++){if(&$test){W
 function SelectFile($name){$item=Find $name -Type ([System.Windows.Automation.ControlType]::ListItem);if(!$item){throw ('Missing file '+$name)};([System.Windows.Automation.SelectionItemPattern]$item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select();$item.SetFocus();Start-Sleep -Milliseconds 150}
 function SetValue($item,$value){([System.Windows.Automation.ValuePattern]$item.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue($value)}
 function Tool($name){[void][ProductivityUiNative]::SetForegroundWindow($app.MainWindowHandle); Invoke (Find '工具' -Type ([System.Windows.Automation.ControlType]::MenuItem)); for($attempt=0;$attempt -lt 40;$attempt++){if(Find $name -Type ([System.Windows.Automation.ControlType]::MenuItem)){break};Start-Sleep -Milliseconds 100};Invoke (Find $name -Type ([System.Windows.Automation.ControlType]::MenuItem))}
+if($ContainingFormat -ne 'none'){
+    SelectFile $childName
+    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    Check 'nested productivity archive opens' { $null -ne (Find 'document.docx' -Type ([System.Windows.Automation.ControlType]::ListItem)) }
+    $script:childPath=$null
+    Check 'nested browsing uses a real extracted child archive' { $script:childPath=Get-ChildItem (Join-Path $env:TEMP 'AuraZip') -Filter $childName -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName; $null -ne $script:childPath }
+    $archivePath=$script:childPath
+}
 SelectFile 'document.docx'
 Check 'Office document text appears in the preview pane' { (Find 'PreviewText' -Id).Current.Name -like '*AuraZip Office preview verified*' }
 SelectFile 'pages.pdf'
@@ -70,13 +86,37 @@ Invoke (Find '写回压缩包' -Type ([System.Windows.Automation.ControlType]::B
 Check 'confirmed external change completes an archive update' { $null -ne (Find '更新完成') }
 Invoke (Find '关闭' -Type ([System.Windows.Automation.ControlType]::Button))
 Check 'external edit is saved into the original ZIP' { $z=[IO.Compression.ZipFile]::OpenRead($archivePath);try{$reader=[IO.StreamReader]::new($z.GetEntry($unique).Open());try{$reader.ReadToEnd() -eq 'changed by external editor'}finally{$reader.Dispose()}}finally{$z.Dispose()} }
+if($ContainingFormat -ne 'none'){
+    $verification=Join-Path $fixture 'verify-nested'
+    & $engine x $launchPath $childName ('-o'+$verification) '-y' | Out-Null
+    if($LASTEXITCODE -ne 0){throw 'The updated containing archive failed extraction.'}
+    $persisted=Join-Path $verification $childName
+    Check 'nested comments and external edits reach the real outer file' {
+        $z=[IO.Compression.ZipFile]::OpenRead($persisted)
+        try{$reader=[IO.StreamReader]::new($z.GetEntry($unique).Open());try{$reader.ReadToEnd() -eq 'changed by external editor' -and [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($persisted)).Contains('AuraZip 中文注释')}finally{$reader.Dispose()}}finally{$z.Dispose()}
+    }
+}
 [IO.File]::WriteAllText($script:editedPath,'second external edit',[Text.UTF8Encoding]::new($false))
 Check 'a later external save is detected' { $null -ne (Find '写回压缩包' -Type ([System.Windows.Automation.ControlType]::Button)) }
+if($ContainingFormat -ne 'none'){
+    $outside=Join-Path $fixture 'outside.txt';[IO.File]::WriteAllText($outside,'independent outer change')
+    & $engine a $launchPath $outside | Out-Null
+    if($LASTEXITCODE -ne 0){throw 'The independent outer edit failed.'}
+    $outsideHash=(Get-FileHash -LiteralPath $launchPath).Hash
+    Invoke (Find '写回压缩包' -Type ([System.Windows.Automation.ControlType]::Button))
+    Check 'an external containing-archive edit stops the nested writeback' {
+        $script:conflictClose=Find 'CloseButton' -Id
+        $null -ne (Find '操作失败') -and $script:conflictClose -and $script:conflictClose.Current.Name -eq '关闭' -and $script:conflictClose.Current.IsEnabled
+    }
+    Invoke $script:conflictClose
+    Check 'a nested conflict preserves the independent outer edit' { (Get-FileHash -LiteralPath $launchPath).Hash -eq $outsideHash }
+}else{
 $z=[IO.Compression.ZipFile]::Open($archivePath,[IO.Compression.ZipArchiveMode]::Update);ZipText $z 'outside.txt' 'independent change';$z.Dispose()
 Invoke (Find '写回压缩包' -Type ([System.Windows.Automation.ControlType]::Button))
 $conflict="原压缩包已发生变化，为避免覆盖其他修改，本次未写回。修改后的文件保留在：`n"+$script:editedPath
 Check 'concurrent archive changes prevent overwriting the original' { $null -ne (Find $conflict) }
 Invoke (Find '关闭' -Type ([System.Windows.Automation.ControlType]::Button))
+}
 Check 'conflicting external file remains available' { [IO.File]::ReadAllText($script:editedPath) -eq 'second external edit' }
 # The editor's own document remains open; do not close unrelated tabs or applications.
 [void]$app.CloseMainWindow();if(!$app.WaitForExit(5000)){throw 'Test app did not close'}

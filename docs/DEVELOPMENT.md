@@ -29,17 +29,36 @@ dotnet build AuraZip/AuraZip.csproj -p:Platform=x64 -p:Configuration=Debug
 
 ```powershell
 dotnet run --project tests/AuraZip.Core.Tests
+dotnet run --project tests/AuraZip.Core.Tests -- --nested-only
+dotnet run --project tests/AuraZip.Core.Tests -- --office-only
+dotnet run --project tests/AuraZip.Core.Tests -- --office-process-only
+dotnet run --project tests/AuraZip.Core.Tests -- --legacy-office-only
+dotnet run --project tests/AuraZip.Core.Tests -- --office-layout-only
 ```
 
-核心测试生成独立临时目录，覆盖归档读取、解压、加密、分卷、CRC、路径检查、取消、元数据、ZIP/7Z 修改、注释、哈希和 Office 文本提取。加密读取回归覆盖 RAR4/RAR5 与分卷、密码错误分类、ZIP AES 认证数据损坏，以及失败时保留原文件和清理临时目录。RAR 样本来源与许可见 [样本说明](../tests/Fixtures/README.md)。
+RAR 写入测试需单独安装或准备合法使用的 WinRAR 命令行编码器。编码器不属于仓库或发行包；`AURAZIP_TEST_RAR_ENCODER` 仅供测试进程使用，应用从设置读取路径。
+
+```powershell
+$env:AURAZIP_TEST_RAR_ENCODER = 'C:\Program Files\WinRAR\Rar.exe'
+dotnet run --project tests/AuraZip.Core.Tests -- --rar-only
+dotnet run --project tests/AuraZip.Core.Tests
+powershell -File tests/RarUi.ps1 -EncoderPath $env:AURAZIP_TEST_RAR_ENCODER
+```
+
+核心测试生成独立临时目录，覆盖归档读取、解压、加密、分卷、CRC、路径检查、取消、元数据、ZIP/7Z 修改、嵌套写回与回滚、注释、哈希，以及 Office 文本、版式和解析进程限制。加密读取回归覆盖 RAR4/RAR5 与分卷、密码错误分类、ZIP AES 认证数据损坏，以及失败时保留原文件和清理临时目录。RAR 样本来源与许可见 [样本说明](../tests/Fixtures/README.md)。
 
 先构建并注册 Debug 包，再运行界面验证。验证需要可交互桌面，避免同时操作测试窗口。
 
 ```powershell
 powershell -File tests/CompressionUi.ps1 -Configuration Debug -IncludeTar
+powershell -File tests/CompressionUi.ps1 -Configuration Debug -IncludeTar -IncludeStreams
 powershell -File tests/FeaturesUi.ps1
 powershell -File tests/FeaturesUi.ps1 -ArchiveFormat 7z
 powershell -File tests/ProductivityUi.ps1
+powershell -File tests/OfficeUi.ps1
+powershell -File tests/OfficeUi.ps1 -EncryptedArchive
+powershell -File tests/ProductivityUi.ps1 -ContainingFormat zip
+powershell -File tests/ProductivityUi.ps1 -ContainingFormat 7z
 powershell -File tests/PasswordUi.ps1
 powershell -File tests/LargeArchiveUi.ps1
 
@@ -55,6 +74,8 @@ powershell -File tests/DragUi.ps1 -Multiple
 ```
 
 `ProductivityUi.ps1` 使用系统默认文本编辑器验证文件写回流程。界面测试使用独立样本和输出目录。
+
+`OfficeUi.ps1` 覆盖旧版文档、文档密码、原生版式控件、分页与取消；`-EncryptedArchive` 验证压缩包密码和文档密码互不影响。Office 解析使用同一可执行文件的独立进程，以匿名管道传输文档与密码，Windows Job Object 限制内存与子进程数量。密码不进入命令行或临时文件。不要并发运行会重建同一核心测试程序的脚本。
 
 `LargeArchiveUi.ps1` 默认生成 10,000 个文件的 ZIP，记录界面打开、搜索和恢复列表的耗时及进程工作集。已构建的独立测试应用可设置 `AURAZIP_TEST_EXECUTABLE`，供采用 `UiActivation.ps1` 的测试脚本使用；未设置时仍使用开发包激活。
 

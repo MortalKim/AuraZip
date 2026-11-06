@@ -19,7 +19,12 @@ public sealed partial class ArchiveService
         return IsRar(stream) || (!string.IsNullOrEmpty(password) && (IsZip(stream) || IsSevenZip(stream)));
     }
 
-    private static bool NeedsVerifiedRead(ArchiveIndex index) => index.IsSingleStream || index.Items.Any(i => i.IsEncrypted);
+    private static bool NeedsVerifiedRead(ArchiveIndex index)
+    {
+        if (index.IsSingleStream || index.Items.Any(i => i.IsEncrypted)) return true;
+        using var stream = File.OpenRead(index.FilePath);
+        return IsRar(stream);
+    }
 
     private static void AddReadEncoding(List<string> arguments, ArchiveIndex index)
     {

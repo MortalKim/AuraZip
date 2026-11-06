@@ -1,4 +1,4 @@
-﻿param([ValidateSet('Debug','Release')][string]$Configuration='Release', [switch]$UseRegisteredPackage, [switch]$IncludeTar)
+﻿param([ValidateSet('Debug','Release')][string]$Configuration='Release', [switch]$UseRegisteredPackage, [switch]$IncludeTar, [switch]$IncludeStreams, [switch]$IncludeRar)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
@@ -25,6 +25,8 @@ function Launch([string]$arguments){
 }
 function CloseInstance{[void]$script:process.CloseMainWindow();if(!$script:process.WaitForExit(5000)){throw 'The UI test application did not close.'}}
 $formats=@('ZIP','7Z');if($IncludeTar){$formats+=@('TAR','TAR.GZ','TAR.BZ2','TAR.XZ')}
+if($IncludeStreams){$formats+=@('GZ','BZ2','XZ')}
+if($IncludeRar){$formats+=@('RAR')}
 foreach($format in $formats){
     Launch ('--shell compress -- "'+$source+'"')
     Check 'shell compression opens the native create dialog' { $null -ne (Find 'CompressionDestination' -Id) }
@@ -36,7 +38,13 @@ foreach($format in $formats){
         ([System.Windows.Automation.SelectionItemPattern]$option.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)).Select()
         Start-Sleep -Milliseconds 400
     }
-    $output=Join-Path $fixture ('result.'+$format.ToLowerInvariant())
+    $single=$format -in @('GZ','BZ2','XZ')
+    if($single){
+        Check 'standalone format preserves the source extension in its default name' { (Find 'CompressionDestination' -Id).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq ($source+'.'+$format.ToLowerInvariant()) }
+        Check 'standalone format disables password and volumes' { !(Find 'CompressionPassword' -Id).Current.IsEnabled -and !(Find 'CompressionVolume' -Id).Current.IsEnabled }
+    }
+    $baseName=if($single){'source.txt.'}else{'result.'}
+    $output=Join-Path $fixture ($baseName+$format.ToLowerInvariant())
     Check 'create dialog remains available after selecting format' { $null -ne (Find 'CompressionDestination' -Id) }
     $field=Find 'CompressionDestination' -Id
     ([System.Windows.Automation.ValuePattern]$field.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)).SetValue($output)

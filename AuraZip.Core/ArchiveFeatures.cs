@@ -77,11 +77,16 @@ public sealed partial class ArchiveService
     public async Task<CompressionResult> CreateArchiveAsync(string destination, IReadOnlyList<string> paths, CompressionOptions options,
         OperationControl control, IProgress<ArchiveProgress> progress, CancellationToken token, bool overwrite = false)
     {
-        if (options.Format is not ("zip" or "7z" or "tar" or "tar.gz" or "tar.bz2" or "tar.xz") || options.Level is < 0 or > 9 || options.VolumeBytes < 0) throw new ArgumentException("Invalid compression options.");
-        if (options.Format.StartsWith("tar", StringComparison.Ordinal) && !string.IsNullOrEmpty(options.Password)) throw new ArgumentException("TAR archives do not support password encryption.");
+        if (options.Format == "rar") return await CreateRarAsync(destination, paths, options, control, progress, token, overwrite).ConfigureAwait(false);
+        if (options.Format is not ("zip" or "7z" or "tar" or "tar.gz" or "tar.bz2" or "tar.xz" or "gz" or "bz2" or "xz") || options.Level is < 0 or > 9 || options.VolumeBytes < 0) throw new ArgumentException("Invalid compression options.");
+        bool singleStream = options.Format is "gz" or "bz2" or "xz";
+        if (options.Format is not ("zip" or "7z") && !string.IsNullOrEmpty(options.Password)) throw new ArgumentException("The selected format does not support password encryption.");
+        if (singleStream && (paths.Count != 1 || !File.Exists(paths[0]) || options.VolumeBytes > 0)) throw new ArgumentException("GZ, BZ2 and XZ require one file without split volumes. Use TAR for folders or multiple files.");
         if (options.Format == "zip" && options.Password is { Length: > 0 } zipPassword && (zipPassword.Length > 99 || zipPassword.Any(c => c < 32 || c > 126)))
             throw new ArgumentException("ZIP passwords must contain 1–99 printable ASCII characters. Use 7z for Unicode passwords.");
         destination = Path.GetFullPath(destination);
+        if (paths.Any(p => string.Equals(Path.GetFullPath(p), destination, StringComparison.OrdinalIgnoreCase))) throw new IOException("The output archive cannot replace its source file.");
+        if (overwrite && (options.VolumeBytes > 0 || File.Exists(destination + ".001"))) throw new NotSupportedException("Split archives cannot be overwritten. Choose a different output name.");
         if (!File.Exists(_enginePath)) throw new FileNotFoundException("The bundled compression engine is missing.", _enginePath);
         var entries = await Task.Run(() => SourceEntries(paths, destination, token).ToList(), token).ConfigureAwait(false);
         if (entries.Select(e => e.Key).Distinct(StringComparer.OrdinalIgnoreCase).Count() != entries.Count) throw new IOException("Selected items have duplicate names. Choose their parent folders instead.");
@@ -124,10 +129,15 @@ public sealed partial class ArchiveService
             }
             foreach (var entry in entries.Where(e => e.Directory).OrderByDescending(e => e.Key.Length)) Directory.SetLastWriteTime(SafeOutputPath(input, entry.Key), Directory.GetLastWriteTime(entry.Source));
         }, token);
-        var outputArchive = Path.Combine(workspace.Path, "output." + options.Format);
+        // Headerless BZ2/XZ streams derive the extracted filename from the archive name.
+        var outputName = singleStream ? Path.GetFileName(destination) : "output." + options.Format;
+        var outputDirectory = singleStream ? Path.Combine(workspace.Path, "output") : workspace.Path;
+        Directory.CreateDirectory(outputDirectory);
+        var outputArchive = Path.Combine(outputDirectory, outputName);
         var list = Path.Combine(workspace.Path, "inputs.txt");
         await File.WriteAllLinesAsync(list, (direct ? roots : Directory.GetFileSystemEntries(input)).Select(Path.GetFileName)!, new UTF8Encoding(false), token);
-        var arguments = new List<string> { "a", "-t" + (wrappedTar ? "tar" : options.Format), "-scsUTF-8", "-sccUTF-8", "-bsp1", "-bb1", "-y", "-spd" };
+        var engineFormat = options.Format switch { "gz" => "gzip", "bz2" => "bzip2", _ => options.Format };
+        var arguments = new List<string> { "a", "-t" + (wrappedTar ? "tar" : engineFormat), "-scsUTF-8", "-sccUTF-8", "-bsp1", "-bb1", "-y", "-spd" };
         if (!options.Format.StartsWith("tar", StringComparison.Ordinal)) { arguments.Add("-mx=" + options.Level); arguments.Add("-mmt=on"); }
         if (!string.IsNullOrEmpty(options.Password)) { arguments.Add("-p" + options.Password); arguments.Add(options.Format == "zip" ? "-mem=AES256" : "-mhe=" + (options.EncryptNames ? "on" : "off")); }
         if (options.VolumeBytes > 0 && !wrappedTar) arguments.Add("-v" + options.VolumeBytes + "b");
@@ -147,7 +157,7 @@ public sealed partial class ArchiveService
             var wrapProgress = new CompressionProgress(p => progress.Report(p with { FileName = Path.GetFileName(destination), BytesDone = firstEnd + (long)((double)p.BytesDone / Math.Max(1, total) * (total - total / 100 - firstEnd)), FilesDone = count, Stage = ArchiveOperationStage.Compressing }));
             await RunEngineAsync(wrap, workspace.Path, control, wrapProgress, total, count, token);
         }
-        var outputs = Directory.EnumerateFiles(workspace.Path, "output." + options.Format + "*").OrderBy(p => p, StringComparer.Ordinal).ToList();
+        var outputs = Directory.EnumerateFiles(outputDirectory, outputName + "*").OrderBy(p => p, StringComparer.Ordinal).ToList();
         if (outputs.Count == 0) throw new IOException("The compression engine did not produce an archive.");
         var targets = outputs.Select(p => destination + p[outputArchive.Length..]).ToArray();
         if (targets.Any(p => Directory.Exists(p) || (!overwrite && File.Exists(p)))) throw new IOException("An output archive already exists. Choose a different name.");
@@ -214,6 +224,11 @@ public sealed partial class ArchiveService
         string? renameKey, string? renameTo, OperationControl control, IProgress<ArchiveProgress> progress, CancellationToken token,
         string? password = null, string additionRoot = "")
     {
+        if (index.FilePath.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
+        {
+            await EditRarAsync(index, additions, remove, renameKey, renameTo, control, progress, token, password, additionRoot).ConfigureAwait(false);
+            return;
+        }
         if (index.FilePath.EndsWith(".7z", StringComparison.OrdinalIgnoreCase))
         {
             await EditSevenZipAsync(index, additions, remove, renameKey, renameTo, control, progress, token, password, additionRoot);
@@ -242,7 +257,7 @@ public sealed partial class ArchiveService
         else await CreateArchiveAsync(encrypted, Directory.GetFileSystemEntries(finalContent), new("zip", Password: password), control, progress, token);
         WriteZipComment(encrypted, ReadZipCommentBytes(index.FilePath));
         var temporary = index.FilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try { File.Copy(encrypted, temporary); control.Wait(token); if (await ComputeHashesAsync(index.FilePath, token) != originalHash) throw new IOException("The archive changed outside AuraZip. Reopen it before saving."); File.Move(temporary, index.FilePath, true); }
+        try { File.Copy(encrypted, temporary); control.Wait(token); await ReplaceArchiveAsync(temporary, index.FilePath, originalHash, token); }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
@@ -316,8 +331,7 @@ public sealed partial class ArchiveService
             }
             control.Wait(token);
             WriteZipComment(temporary, ReadZipCommentBytes(index.FilePath));
-            if (await ComputeHashesAsync(index.FilePath, token) != originalHash) throw new IOException("The archive changed outside AuraZip. Reopen it before saving.");
-            File.Move(temporary, index.FilePath, true);
+            await ReplaceArchiveAsync(temporary, index.FilePath, originalHash, token);
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }, token);

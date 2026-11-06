@@ -109,7 +109,7 @@ public sealed class OperationDialog
             }
         }
         catch (OperationCanceledException) { WasCancelled = true; dialog.Title = T("已取消"); status.Text = T("已完成的文件会保留，当前未完成的文件已清理。"); }
-        catch (Exception ex) { LastError = ex; dialog.Title = T("Operation failed"); status.Text = T(ex.Message) + T("\nCheck the file, password and destination, then try again."); }
+        catch (Exception ex) { LastError = ex; dialog.Title = T("Operation failed"); status.Text = DescribeError(ex) + T("\nCheck the file, password and destination, then try again."); }
         finally
         {
             running = false; timer.Stop(); clock.Stop(); activeClock.Stop(); rate.Text = "";

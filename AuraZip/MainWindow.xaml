@@ -120,10 +120,18 @@
                                     <TextBlock Text="{Binding [预览], Source={StaticResource Strings}}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                                     <TextBlock x:Name="PreviewName" Grid.Row="1" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap"/>
                                     <TextBlock x:Name="PreviewInfo" Grid.Row="2" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap"/>
-                                    <ScrollViewer Grid.Row="3" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                    <ScrollViewer x:Name="OfficePreviewScroll" AutomationProperties.AutomationId="OfficePreviewScroll" Grid.Row="3" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
                                         <StackPanel Spacing="10"><Image x:Name="PreviewImage" Stretch="Uniform" MaxHeight="200" Visibility="Collapsed"/>
                                             <StackPanel x:Name="PdfControls" Orientation="Horizontal" Spacing="8" Visibility="Collapsed"><Button x:Name="PdfPrevious" Content="&#x2039;" Click="PdfPage_Click" AutomationProperties.Name="{Binding [上一页], Source={StaticResource Strings}}"/><TextBlock x:Name="PdfPageNumber" VerticalAlignment="Center"/><Button x:Name="PdfNext" Content="&#x203A;" Click="PdfPage_Click" AutomationProperties.Name="{Binding [下一页], Source={StaticResource Strings}}"/></StackPanel>
                                             <MediaPlayerElement x:Name="PreviewMedia" AutoPlay="False" AreTransportControlsEnabled="True" Height="180" Visibility="Collapsed"/>
+                                            <Button x:Name="OfficePasswordButton" Content="{Binding [输入文档密码…], Source={StaticResource Strings}}" Visibility="Collapsed" Click="OfficePassword_Click"/>
+                                            <StackPanel x:Name="OfficePreviewControls" Spacing="8" Visibility="Collapsed">
+                                                <ComboBox x:Name="OfficePreviewMode" AutomationProperties.Name="{Binding [预览方式], Source={StaticResource Strings}}" HorizontalAlignment="Stretch" SelectedIndex="0" SelectionChanged="OfficePreviewMode_SelectionChanged"><ComboBoxItem Content="{Binding [文本], Source={StaticResource Strings}}"/><ComboBoxItem Content="{Binding [版式], Source={StaticResource Strings}}"/></ComboBox>
+                                                <StackPanel x:Name="OfficePageControls" Orientation="Horizontal" Spacing="8" Visibility="Collapsed"><Button x:Name="OfficePrevious" Content="&#x2039;" Click="OfficePage_Click" AutomationProperties.Name="{Binding [上一页], Source={StaticResource Strings}}"/><TextBlock x:Name="OfficePageNumber" VerticalAlignment="Center"/><Button x:Name="OfficeNext" Content="&#x203A;" Click="OfficePage_Click" AutomationProperties.Name="{Binding [下一页], Source={StaticResource Strings}}"/></StackPanel>
+                                                <TextBlock x:Name="OfficeSectionTitle" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                                                <TextBlock x:Name="OfficePreviewLimit" Text="{Binding [版式预览已达到显示上限，完整内容可使用默认应用打开。], Source={StaticResource Strings}}" FontSize="12" TextWrapping="Wrap" Visibility="Collapsed"/>
+                                            </StackPanel>
+                                            <StackPanel x:Name="OfficeLayout" Spacing="8" Visibility="Collapsed"/>
                                             <TextBlock x:Name="PreviewText" Text="{Binding [选择文件以预览], Source={StaticResource Strings}}" FontFamily="Consolas" FontSize="13" TextWrapping="Wrap" IsTextSelectionEnabled="True"/></StackPanel>
                                     </ScrollViewer>
                                 </Grid>

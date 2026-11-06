@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Windows.Storage;
 using Windows.Storage.Pickers;
@@ -16,12 +17,13 @@ namespace AuraZip;
 
 public sealed partial class MainWindow
 {
-    private sealed class ExternalEdit(ArchiveIndex archive, string key, string path, string? password, FileHashes fileHash, FileHashes archiveHash)
+    private sealed class ExternalEdit(ArchiveIndex archive, string key, string path, string? password, FileHashes fileHash, FileHashes archiveHash, ParentArchive[] parents)
     {
         public ArchiveIndex Archive = archive;
         public string Key = key, Path = path;
         public string? Password = password;
         public FileHashes FileHash = fileHash, ArchiveHash = archiveHash;
+        public ParentArchive[] Parents = parents;
         public bool Deferred;
     }
     private readonly List<ExternalEdit> _externalEdits = new();
@@ -38,8 +40,30 @@ public sealed partial class MainWindow
     }
     private async Task TrackExternalEditAsync(ArchiveIndex archive, ArchiveItem item, string path, string? password)
     {
-        if (!CanEditArchive(archive)) return;
-        _externalEdits.Add(new(archive, item.Key, path, password, await ArchiveService.ComputeHashesAsync(path), await ArchiveService.ComputeHashesAsync(archive.FilePath)));
+        if (!CanEditArchive(archive) || _parents.Any(p => !CanEditArchive(p.Index))) return;
+        _externalEdits.Add(new(archive, item.Key, path, password, await ArchiveService.ComputeHashesAsync(path), await ArchiveService.ComputeHashesAsync(archive.FilePath), _parents.ToArray()));
+    }
+
+    private async Task SaveArchiveChangeAsync(ArchiveIndex index, string? password, ParentArchive[] parents,
+        Func<ArchiveIndex, Task> update, OperationControl control, IProgress<ArchiveProgress> progress, CancellationToken token)
+    {
+        if (parents.Length == 0) { await update(index); return; }
+        var targets = parents.Select(p => new NestedArchiveParent(p.Index, p.EntryKey, p.Password, p.Hash)).ToArray();
+        var result = await _archives.UpdateNestedAsync(index, password, targets, update, control, progress, token);
+        var updated = result.Archives;
+        for (int i = 0; i < parents.Length; i++)
+        {
+            parents[i].Index = updated[i + 1];
+            parents[i].Hash = result.Hashes[i + 1];
+        }
+        for (int i = 0; i < updated.Count; i++)
+        {
+            var changed = updated[i];
+            var matching = _externalEdits.Where(e => e.Archive.FilePath == changed.FilePath).ToArray();
+            if (matching.Length == 0) continue;
+            var hash = result.Hashes[i];
+            foreach (var other in matching) { other.Archive = changed; other.ArchiveHash = hash; }
+        }
     }
     private async Task CheckExternalEditsAsync(bool includeDeferred = false)
     {
@@ -74,17 +98,18 @@ public sealed partial class MainWindow
                 try
                 {
                     succeeded = await new OperationDialog().RunAsync(Root.XamlRoot, T("正在更新压缩包"), edit.Archive.Name, edit.Archive.Directory,
-                        (control, progress, token) => _archives.EditZipAsync(edit.Archive, new[] { edit.Path }, null, null, null, control, progress, token, edit.Password, parent));
+                        (control, progress, token) => SaveArchiveChangeAsync(edit.Archive, edit.Password, edit.Parents,
+                            candidate => _archives.EditZipAsync(candidate, new[] { edit.Path }, null, null, null, control, progress, token, edit.Password, parent), control, progress, token));
                 }
                 finally { _busy = _dialogOpen = false; UpdateCommands(); }
                 if (!succeeded) { edit.Deferred = true; continue; }
                 var updated = await _archives.OpenAsync(edit.Archive.FilePath, edit.Password, codePage: edit.Archive.CodePage);
                 var hash = await ArchiveService.ComputeHashesAsync(updated.FilePath);
                 foreach (var other in _externalEdits.Where(e => e.Archive.FilePath == updated.FilePath)) { other.Archive = updated; other.ArchiveHash = hash; }
-                if (_index?.FilePath == updated.FilePath)
+                if (_index is not null && (_index.FilePath == updated.FilePath || edit.Parents.Any(p => p.Index.FilePath == _index.FilePath)))
                 {
                     var folder = _currentPath;
-                    await OpenArchiveAsync(updated.FilePath);
+                    await OpenArchiveAsync(_index.FilePath);
                     if (_folders.ContainsKey(folder)) Navigate(folder, false);
                 }
             }
@@ -173,7 +198,13 @@ public sealed partial class MainWindow
             try { result = await dialog.ShowAsync(); } finally { _dialogOpen = false; }
             if (result != ContentDialogResult.Primary) return;
             _busy = true; UpdateCommands();
-            try { await ArchiveService.SetZipCommentAsync(path, field.Text); }
+            var comment = field.Text;
+            try
+            {
+                using var control = new OperationControl();
+                await SaveArchiveChangeAsync(_index, _password, _parents.ToArray(), candidate => ArchiveService.SetZipCommentAsync(candidate.FilePath, comment),
+                    control, new Progress<ArchiveProgress>(), default);
+            }
             finally { _busy = false; UpdateCommands(); }
             StatusText.Text = T("注释已保存");
         }

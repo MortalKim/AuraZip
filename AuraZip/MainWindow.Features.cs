@@ -22,17 +22,21 @@ public sealed partial class MainWindow
     private int? _codePage;
     private bool _searchAll, _batchMode;
     private CancellationTokenSource? _opening;
-    private readonly Stack<(ArchiveIndex Index, string? Password, string Folder)> _parents = new();
+    private sealed class ParentArchive(ArchiveIndex index, string? password, string folder, string entryKey, FileHashes hash)
+    {
+        public ArchiveIndex Index = index;
+        public string? Password = password;
+        public string Folder = folder;
+        public string EntryKey = entryKey;
+        public FileHashes Hash = hash;
+    }
+    private readonly Stack<ParentArchive> _parents = new();
     private readonly List<TemporaryWorkspace> _temporary = new();
     private readonly List<string> _batchResults = new();
     private (string Directory, bool PerArchive, bool Smart, bool Folder, ConflictPolicy Policy, bool Open)? _batchPlan;
     private string SelectionRoot => _searchAll && _query.Length > 0 ? "" : _currentPath;
-    private static bool CanEditArchive(ArchiveIndex index)
-    {
-        try { return (index.FilePath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) || index.FilePath.EndsWith(".7z", StringComparison.OrdinalIgnoreCase)) && ArchiveFormats.Volumes(index.FilePath).Count == 1 && !index.Items.Any(i => i.IsLink); }
-        catch (IOException) { return false; }
-    }
-    private bool EditableZip => _index is not null && CanEditArchive(_index);
+    private bool CanEditArchive(ArchiveIndex index) => _archives.SupportsEditing(index);
+    private bool EditableZip => _index is not null && CanEditArchive(_index) && _parents.All(p => CanEditArchive(p.Index));
 
     private async Task CreateArchiveDialogAsync(IReadOnlyList<string>? initial = null)
     {
@@ -41,14 +45,19 @@ public sealed partial class MainWindow
         var list = new ListView { MaxHeight = 140, SelectionMode = ListViewSelectionMode.None };
         var destination = new TextBox { Header = T("压缩包路径"), Text = sources.Count == 0 ? "" : Path.Combine(Path.GetDirectoryName(sources[0])!, Path.GetFileNameWithoutExtension(sources[0]) + ".zip") };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(destination, "CompressionDestination");
-        var formats = new[] { "zip", "7z", "tar", "tar.gz", "tar.bz2", "tar.xz" };
-        var format = new ComboBox { Header = T("格式"), ItemsSource = new[] { "ZIP", "7Z", "TAR", "TAR.GZ", "TAR.BZ2", "TAR.XZ" }, SelectedIndex = 0, HorizontalAlignment = HorizontalAlignment.Stretch };
+        var formats = new[] { "zip", "7z", "tar", "tar.gz", "tar.bz2", "tar.xz", "gz", "bz2", "xz", "rar" };
+        var format = new ComboBox { Header = T("格式"), ItemsSource = formats.Select(f => f.ToUpperInvariant()).ToArray(), SelectedIndex = 0, HorizontalAlignment = HorizontalAlignment.Stretch };
+        bool SingleStream() => formats[format.SelectedIndex] is "gz" or "bz2" or "xz";
+        bool HasPassword() => formats[format.SelectedIndex] is "zip" or "7z" or "rar";
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(format, "CompressionFormat");
+        var formatHint = new TextBlock { Text = T("GZ、BZ2、XZ 仅支持一个文件，不支持密码和分卷。多个文件或文件夹请使用 TAR 系列。"), TextWrapping = TextWrapping.Wrap, MaxWidth = 440, FontSize = 12, Visibility = Visibility.Collapsed };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(formatHint, "CompressionFormatHint");
+        var suggestedDestination = destination.Text;
         var level = new ComboBox { Header = T("压缩级别"), ItemsSource = new[] { T("仅存储"), T("快速"), T("标准"), T("最大"), T("极限") }, SelectedIndex = 2, HorizontalAlignment = HorizontalAlignment.Stretch };
         var password = new PasswordBox { Header = T("密码（如有）"), PlaceholderText = T("无需密码时留空") };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(password, "CompressionPassword");
         var confirm = new PasswordBox { Header = T("确认密码") };
-        var names = new CheckBox { Content = T("加密文件名（7Z）"), IsChecked = true, IsEnabled = false };
+        var names = new CheckBox { Content = T("加密文件名（7Z / RAR）"), IsChecked = true, IsEnabled = false };
         var volume = new ComboBox { Header = T("分卷大小"), ItemsSource = new[] { T("不分卷"), "10 MB", "100 MB", "500 MB", "1 GB", "2 GB", T("自定义") }, SelectedIndex = 0, HorizontalAlignment = HorizontalAlignment.Stretch };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(volume, "CompressionVolume");
         var volumeSize = new TextBox { Text = "100", PlaceholderText = T("大小"), HorizontalAlignment = HorizontalAlignment.Stretch };
@@ -73,7 +82,7 @@ public sealed partial class MainWindow
         var error = new TextBlock { TextWrapping = TextWrapping.Wrap, MaxWidth = 440, FontSize = 12 };
         var panel = new StackPanel { Spacing = 10, MinWidth = Math.Min(420, Math.Max(220, Root.ActualWidth - 100)), MaxWidth = 460, AllowDrop = true };
         var sourceHint = new TextBlock { Text = T("列表中的所有项目都会参与压缩。"), FontSize = 12, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], TextWrapping = TextWrapping.Wrap };
-        foreach (var child in new UIElement[] { new TextBlock { Text = T("文件和文件夹"), FontSize = 12 }, list, sourceHint, buttons, destination, browse, format, level, password, confirm, names, volume, customVolume, error }) panel.Children.Add(child);
+        foreach (var child in new UIElement[] { new TextBlock { Text = T("文件和文件夹"), FontSize = 12 }, list, sourceHint, buttons, destination, browse, format, formatHint, level, password, confirm, names, volume, customVolume, error }) panel.Children.Add(child);
         var dialog = new ContentDialog { XamlRoot = Root.XamlRoot, Title = T("创建压缩包"), Content = new ScrollViewer { Content = panel, MaxHeight = Math.Max(240, Math.Min(650, Root.ActualHeight - 180)) }, PrimaryButtonText = T("压缩"), CloseButtonText = T("取消"), DefaultButton = ContentDialogButton.Primary };
         void SetSelecting(bool enabled)
         {
@@ -104,9 +113,10 @@ public sealed partial class MainWindow
             }
             select.IsEnabled = sources.Count > 0;
             if (sources.Count == 0) SetSelecting(false);
-            if (string.IsNullOrWhiteSpace(destination.Text) && sources.Count > 0) destination.Text = Path.Combine(Path.GetDirectoryName(sources[0])!, Path.GetFileNameWithoutExtension(sources[0]) + "." + formats[format.SelectedIndex]);
-            dialog.IsPrimaryButtonEnabled = sources.Count > 0;
+            if (string.IsNullOrWhiteSpace(destination.Text) && sources.Count > 0) destination.Text = suggestedDestination = SuggestedDestination();
+            dialog.IsPrimaryButtonEnabled = sources.Count > 0 && (!SingleStream() || (sources.Count == 1 && File.Exists(sources[0]))) && (formats[format.SelectedIndex] != "rar" || _archives.CanCreateRar);
         }
+        string SuggestedDestination() => sources.Count == 0 ? "" : Path.Combine(Path.GetDirectoryName(sources[0])!, (SingleStream() ? Path.GetFileName(sources[0]) : Path.GetFileNameWithoutExtension(sources[0])) + "." + formats[format.SelectedIndex]);
         void Add(IEnumerable<string> paths) { foreach (var path in paths) if (!sources.Contains(path, StringComparer.OrdinalIgnoreCase)) sources.Add(path); Refresh(); }
         addFiles.Click += async (_, _) => { var picker = new FileOpenPicker(); picker.FileTypeFilter.Add("*"); WinRT.Interop.InitializeWithWindow.Initialize(picker, Handle); Add((await picker.PickMultipleFilesAsync()).Select(f => f.Path)); };
         addFolder.Click += async (_, _) => { var picker = new FolderPicker(); picker.FileTypeFilter.Add("*"); WinRT.Interop.InitializeWithWindow.Initialize(picker, Handle); var folder = await picker.PickSingleFolderAsync(); if (folder is not null) Add([folder.Path]); };
@@ -115,15 +125,22 @@ public sealed partial class MainWindow
         browse.Click += async (_, _) => { var folder = await PickFolderAsync(); if (folder is not null) destination.Text = Path.Combine(folder, string.IsNullOrEmpty(Path.GetFileName(destination.Text)) ? "Archive.zip" : Path.GetFileName(destination.Text)); };
         format.SelectionChanged += (_, e) =>
         {
-            names.IsEnabled = format.SelectedIndex == 1;
-            password.IsEnabled = confirm.IsEnabled = format.SelectedIndex < 2;
+            names.IsEnabled = formats[format.SelectedIndex] is "7z" or "rar";
+            password.IsEnabled = confirm.IsEnabled = HasPassword();
             level.IsEnabled = format.SelectedIndex != 2;
+            bool single = SingleStream(); bool rar = formats[format.SelectedIndex] == "rar";
+            formatHint.Visibility = single || rar ? Visibility.Visible : Visibility.Collapsed;
+            formatHint.Text = rar ? T(_archives.CanCreateRar ? "RAR 创建和修改使用本机 WinRAR 编码器。" : "RAR 创建和修改需要本机 WinRAR 编码器。请在设置中选择 Rar.exe。") : T("GZ、BZ2、XZ 仅支持一个文件，不支持密码和分卷。多个文件或文件夹请使用 TAR 系列。");
+            volume.IsEnabled = !single;
+            if (single) volume.SelectedIndex = 0;
             if (!string.IsNullOrEmpty(destination.Text))
             {
                 var previous = e.RemovedItems.Count > 0 ? e.RemovedItems[0].ToString()!.ToLowerInvariant() : "zip";
                 var path = destination.Text;
-                destination.Text = (path.EndsWith("." + previous, StringComparison.OrdinalIgnoreCase) ? path[..^(previous.Length + 1)] : Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileNameWithoutExtension(path))) + "." + formats[format.SelectedIndex];
+                destination.Text = path == suggestedDestination ? SuggestedDestination() : (path.EndsWith("." + previous, StringComparison.OrdinalIgnoreCase) ? path[..^(previous.Length + 1)] : Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileNameWithoutExtension(path))) + "." + formats[format.SelectedIndex];
+                suggestedDestination = SuggestedDestination();
             }
+            Refresh();
         };
         panel.DragOver += (_, e) => { e.AcceptedOperation = e.DataView.Contains(StandardDataFormats.StorageItems) ? DataPackageOperation.Copy : DataPackageOperation.None; e.Handled = true; };
         panel.Drop += async (_, e) => { e.Handled = true; if (e.DataView.Contains(StandardDataFormats.StorageItems)) Add((await e.DataView.GetStorageItemsAsync()).Select(i => i.Path)); };
@@ -143,10 +160,12 @@ public sealed partial class MainWindow
         }
         dialog.PrimaryButtonClick += (_, e) =>
         {
-            if (!Path.IsPathFullyQualified(destination.Text) || (format.SelectedIndex < 2 && password.Password != confirm.Password) || sources.Count == 0)
+            if (!Path.IsPathFullyQualified(destination.Text) || (HasPassword() && password.Password != confirm.Password) || sources.Count == 0)
             { e.Cancel = true; error.Text = T("请选择文件，填写完整路径，并确认两次密码一致。"); }
             else if (format.SelectedIndex == 0 && (password.Password.Length > 99 || password.Password.Any(c => c < 32 || c > 126)))
             { e.Cancel = true; error.Text = T("ZIP 密码最多 99 个英文、数字或符号字符。中文密码请选择 7Z 格式。"); }
+            else if (formats[format.SelectedIndex] == "rar" && password.Password.Length > 127)
+            { e.Cancel = true; error.Text = T("RAR passwords must contain at most 127 characters without line breaks."); }
             else if (File.Exists(destination.Text) || Directory.Exists(destination.Text) || File.Exists(destination.Text + ".001"))
             { e.Cancel = true; error.Text = T("目标压缩包已存在，请更换名称。"); }
             else if (!TryGetVolumeBytes())
@@ -156,7 +175,7 @@ public sealed partial class MainWindow
         ContentDialogResult answer;
         try { answer = await dialog.ShowAsync(); } finally { _dialogOpen = false; }
         if (answer != ContentDialogResult.Primary) return;
-        var options = new CompressionOptions(formats[format.SelectedIndex], new[] { 0, 1, 5, 7, 9 }[level.SelectedIndex], format.SelectedIndex < 2 ? password.Password : null, names.IsChecked == true, volumeBytes);
+        var options = new CompressionOptions(formats[format.SelectedIndex], new[] { 0, 1, 5, 7, 9 }[level.SelectedIndex], HasPassword() ? password.Password : null, names.IsChecked == true, volumeBytes);
         CompressionResult? result = null;
         _busy = _dialogOpen = true; UpdateCommands();
         bool success;
@@ -197,26 +216,41 @@ public sealed partial class MainWindow
         if (item.IsDirectory) { Navigate(item.Key); return; }
         try
         {
-            var parent = (_index, _password, _currentPath);
+            var parentIndex = _index;
+            var parentFolder = _currentPath;
+            var nested = ArchiveFormats.Supported(item.Name);
+            // Keep the source stable while extracting and hashing the child. One hash
+            // pass is enough when writers and replacement are denied for this interval.
+            using var parentRead = nested ? File.OpenRead(parentIndex.FilePath) : null;
             var root = await MaterializeAsync([item.Key], preserveFullPath: true);
             if (root is null) return;
+            var parentPassword = _password;
+            var parentHash = nested ? await HashArchiveForNavigationAsync(parentIndex.FilePath) : null;
             var filePath = ArchiveService.SafeOutputPath(root, item.Key);
-            if (ArchiveFormats.Supported(filePath))
+            if (nested)
             {
                 _codePage = null;
                 await OpenArchiveAsync(filePath);
-                if (_index?.FilePath == filePath) { _parents.Push(parent); RefreshPath(); }
-                else _codePage = parent.Item1.CodePage;
+                if (_index?.FilePath == filePath) { _parents.Push(new(parentIndex, parentPassword, parentFolder, item.Key, parentHash!)); RefreshPath(); UpdateCommands(); }
+                else _codePage = parentIndex.CodePage;
             }
             else
             {
-                await TrackExternalEditAsync(parent._index, item, filePath, _password);
+                await TrackExternalEditAsync(parentIndex, item, filePath, parentPassword);
                 if (!await Windows.System.Launcher.LaunchFileAsync(await StorageFile.GetFileFromPathAsync(filePath)))
                     await ShowMessageAsync(T("打开文件"), T("没有可用于打开此文件的应用。"));
             }
         }
         catch (OperationCanceledException) { StatusText.Text = T("已取消"); }
         catch (Exception ex) { await ErrorAsync(T("打开文件"), ex); }
+    }
+
+    private async Task<FileHashes> HashArchiveForNavigationAsync(string path)
+    {
+        _busy = true; _opening = new CancellationTokenSource(); BusyOverlay.Visibility = Visibility.Visible; UpdateCommands();
+        var token = _opening.Token;
+        try { return await Task.Run(() => ArchiveService.ComputeHashesAsync(path, token), token); }
+        finally { _opening.Dispose(); _opening = null; _busy = false; BusyOverlay.Visibility = Visibility.Collapsed; UpdateCommands(); }
     }
 
     private void ReturnToParentArchive()
@@ -283,7 +317,7 @@ public sealed partial class MainWindow
     private async Task UpdateZipAsync(IReadOnlyList<string>? additions = null, bool delete = false, bool rename = false)
     {
         if (_busy || _dialogOpen || _index is null) return;
-        if (!EditableZip) { await ShowMessageAsync(T("修改压缩包"), T("目前仅支持修改不含符号链接的单卷 ZIP、7Z 压缩包。")); return; }
+        if (!EditableZip) { await ShowMessageAsync(T("修改压缩包"), T("当前压缩包及所有外层压缩包都须为不含符号链接的可修改单卷格式。")); return; }
         var index = _index;
         var selected = FileList.SelectedItems.Cast<ArchiveItem>().ToList();
         if ((delete || rename) && selected.Count == 0) return;
@@ -304,7 +338,13 @@ public sealed partial class MainWindow
         if (index.Items.Any(i => i.IsEncrypted) && string.IsNullOrEmpty(_password)) { _password = await AskPasswordAsync(); if (_password is null) return; }
         _busy = _dialogOpen = true; UpdateCommands();
         bool success;
-        try { success = await new OperationDialog().RunAsync(Root.XamlRoot, T("正在更新压缩包"), index.Name, index.Directory, (control, progress, token) => _archives.EditZipAsync(index, additions, delete ? selected.Select(i => i.Key).ToList() : null, rename ? selected[0].Key : null, newName, control, progress, token, _password, SelectionRoot)); }
+        var parents = _parents.ToArray();
+        var password = _password;
+        var selectionRoot = SelectionRoot;
+        _previewCancellation?.Cancel(); ResetRichPreview();
+        try { success = await new OperationDialog().RunAsync(Root.XamlRoot, T("正在更新压缩包"), index.Name, index.Directory,
+            (control, progress, token) => SaveArchiveChangeAsync(index, password, parents,
+                candidate => _archives.EditZipAsync(candidate, additions, delete ? selected.Select(i => i.Key).ToList() : null, rename ? selected[0].Key : null, newName, control, progress, token, password, selectionRoot), control, progress, token)); }
         finally { _busy = _dialogOpen = false; UpdateCommands(); }
         if (success) { var folder = _currentPath; await OpenArchiveAsync(index.FilePath); if (_folders.ContainsKey(folder)) Navigate(folder, false); }
     }

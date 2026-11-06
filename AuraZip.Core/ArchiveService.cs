@@ -8,7 +8,14 @@ namespace AuraZip.Core;
 public sealed partial class ArchiveService
 {
     private readonly string _enginePath;
-    public ArchiveService(string? enginePath = null) => _enginePath = enginePath ?? Path.Combine(AppContext.BaseDirectory, "Engine", "7z.exe");
+    public ArchiveService(string? enginePath = null, string? rarEncoderPath = null)
+    {
+        _enginePath = enginePath ?? Path.Combine(AppContext.BaseDirectory, "Engine", "7z.exe");
+        ConfigureRarEncoder(rarEncoderPath);
+    }
+    public string? RarEncoderPath { get; private set; }
+    public bool CanCreateRar => RarEncoderPath is not null && File.Exists(RarEncoderPath);
+    public void ConfigureRarEncoder(string? path) => RarEncoderPath = RarEncoder.Find(path);
     static ArchiveService() => System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
     private static readonly HashSet<string> ReservedNames = new(StringComparer.OrdinalIgnoreCase)
         { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" };
@@ -20,6 +27,7 @@ public sealed partial class ArchiveService
         var items = new Dictionary<string, ArchiveItem>(StringComparer.Ordinal);
         using var source = File.OpenRead(path);
         bool zip = IsZip(source), rar = IsRar(source), sevenZip = IsSevenZip(source), compressedStream = IsCompressedStream(source);
+        if (rar) return ReadRarIndex(path, password, codePage, token);
         void AddEntry(IEntry e)
         {
             token.ThrowIfCancellationRequested();

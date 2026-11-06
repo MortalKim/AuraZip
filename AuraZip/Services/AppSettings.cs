@@ -16,6 +16,7 @@ public sealed class AppSettings
     public bool SmartExtraction { get; set; } = true;
     public bool OpenAfterExtraction { get; set; }
     public bool ShowFolderPane { get; set; } = true;
+    public string RarEncoderPath { get; set; } = "";
     public List<string> RecentFiles { get; set; } = new();
 
     public static AppSettings Load()

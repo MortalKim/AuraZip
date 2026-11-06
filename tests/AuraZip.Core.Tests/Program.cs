@@ -4,9 +4,16 @@ using System.Formats.Tar;
 using System.Text;
 using AuraZip.Core;
 
+if (args.SequenceEqual(new[] { OfficePreviewWorker.Argument }))
+{
+    Console.SetOut(TextWriter.Null);
+    Environment.ExitCode = await OfficePreviewWorker.RunAsync(Console.OpenStandardInput(), Console.OpenStandardOutput());
+    return;
+}
+
 var root = Path.Combine(Path.GetTempPath(), "AuraZip-check-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);
-var service = new ArchiveService(Path.GetFullPath("AuraZip/Engine/x64/7z.exe"));
+var service = new ArchiveService(Path.GetFullPath("AuraZip/Engine/x64/7z.exe"), Environment.GetEnvironmentVariable("AURAZIP_TEST_RAR_ENCODER"));
 var progress = new DirectProgress();
 int checks = 0;
 void Check(bool condition, string name) { if (!condition) throw new Exception("FAILED: " + name); Console.WriteLine("PASS " + name); checks++; }
@@ -21,6 +28,42 @@ string CreateZip(string name, params (string Name, string Content)[] entries)
 
 try
 {
+    if (args.Contains("--office-layout-only"))
+    {
+        await OfficeLayoutChecks.Run(Check, Reject);
+        Console.WriteLine($"{checks} Office layout checks passed. Fixtures: {root}");
+        return;
+    }
+    if (args.Contains("--legacy-office-only"))
+    {
+        await LegacyOfficeChecks.Run(Check, Reject);
+        Console.WriteLine($"{checks} legacy Office checks passed. Fixtures: {root}");
+        return;
+    }
+    if (args.Contains("--office-process-only"))
+    {
+        await OfficeProcessChecks.Run(Check, Reject);
+        Console.WriteLine($"{checks} Office process checks passed. Fixtures: {root}");
+        return;
+    }
+    if (args.Contains("--office-only"))
+    {
+        await OfficePreviewChecks.Run(root, Check, Reject);
+        Console.WriteLine($"{checks} Office checks passed. Fixtures: {root}");
+        return;
+    }
+    if (args.Contains("--rar-only"))
+    {
+        await RarWritingChecks.Run(root, Check, Reject);
+        Console.WriteLine($"{checks} RAR writing checks passed. Fixtures: {root}");
+        return;
+    }
+    if (args.Contains("--nested-only"))
+    {
+        await NestedArchiveChecks.Run(service, root, Check, Reject);
+        Console.WriteLine($"{checks} nested checks passed. Fixtures: {root}");
+        return;
+    }
     var shellFile = Path.Combine(root, "含 空格.zip");
     var shell = ShellRequest.Parse(new[] { "--shell", "smart", "--", shellFile, shellFile.ToUpperInvariant() });
     Check(shell?.Action == "smart" && shell.Paths.Count == 1 && shell.Paths[0] == shellFile, "shell requests preserve Unicode/spaces and deduplicate paths");
@@ -78,6 +121,7 @@ try
     Check(!File.Exists(Path.Combine(corruptOutput, "bad.txt")) && !Directory.EnumerateFiles(corruptOutput).Any(), "failed extraction removes its temporary file");
     var fixtureFolder = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../tests/Fixtures"));
     await SystematicChecks.Run(service, root, Check, Reject);
+    await StreamCreationChecks.Run(service, root, Check, Reject);
     await EncryptedReadChecks.Run(service, root, fixtureFolder, Check, Reject);
     foreach (var fixture in Directory.EnumerateFiles(fixtureFolder, "*.rar").Where(p => string.Equals(ArchiveFormats.FirstVolume(p), p, StringComparison.OrdinalIgnoreCase)))
     {
@@ -263,6 +307,12 @@ try
         await engine.EditZipAsync(sevenIndex, null, sevenIndex.Items.Select(i => i.Key).ToArray(), null, null, control, progress, default, password);
         Check((await service.OpenAsync(seven, password)).Items.Count == 0, "7Z delete all entries yields a valid empty archive");
     }
+    await OfficePreviewChecks.Run(root, Check, Reject);
+    await OfficeProcessChecks.Run(Check, Reject);
+    await LegacyOfficeChecks.Run(Check, Reject);
+    await OfficeLayoutChecks.Run(Check, Reject);
+    if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AURAZIP_TEST_RAR_ENCODER"))) await RarWritingChecks.Run(root, Check, Reject);
+    await NestedArchiveChecks.Run(service, root, Check, Reject);
     var commentZip = CreateZip("comment.zip", ("hello.txt", "hello"));
     await ArchiveService.SetZipCommentAsync(commentZip, "中文注释\nAuraZip");
     Check(ArchiveService.ReadZipComment(commentZip) == "中文注释\nAuraZip", "ZIP comments roundtrip as UTF-8");

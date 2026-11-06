@@ -13,7 +13,14 @@ function Check([string]$label,[scriptblock]$test) {
     for($attempt=0;$attempt -lt 150;$attempt++){if(&$test){Write-Output "PASS $label";return};Start-Sleep -Milliseconds 100}
     throw "UI check failed: $label"
 }
-function Invoke($element) { if(!$element){throw 'Control not found.'}; $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
+function Invoke($element) {
+    if(!$element){throw 'Control not found.'}
+    for($attempt=0;$attempt -lt 100;$attempt++){
+        if($element.Current.IsEnabled){$element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke();return}
+        Start-Sleep -Milliseconds 100
+    }
+    throw 'The requested UI command did not become enabled.'
+}
 function EnterPassword([string]$value) {
     Check 'password field is available' { $null -ne (Find 'ArchivePassword') }
     (Find 'ArchivePassword').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($value)
@@ -55,9 +62,14 @@ try {
             EnterPassword 'wrong'
             Check 'RAR4 wrong header password offers retry' { $field=Find 'ArchivePassword'; $field -and !(Find 'PrimaryButton').Current.IsEnabled }
         }
-        EnterPassword 'test'
-        Check ($name+' opens after password entry') { (Find 'WindowTitle').Current.Name -like ($name+'*') }
-        Invoke (Find 'TestCommand')
+        if($name -eq 'Rar5.encrypted_filesOnly.rar'){
+            Check 'RAR with visible filenames opens without a header password' { (Find 'WindowTitle').Current.Name -like ($name+'*') -and $null -eq (Find 'ArchivePassword') }
+            Invoke (Find 'TestCommand'); EnterPassword 'test'
+        }else{
+            EnterPassword 'test'
+            Check ($name+' opens after password entry') { (Find 'WindowTitle').Current.Name -like ($name+'*') }
+            Invoke (Find 'TestCommand')
+        }
         Completed ($name+' integrity test completes')
         Invoke (Find 'ExtractCommand')
         Check 'extraction destination is available' { $null -ne (Find 'ExtractionDestination') }

@@ -1,0 +1,25 @@
+<Project>
+  <PropertyGroup>
+    <UsesAuraZipOfficePreview Condition="'$(MSBuildProjectExtension)' == '.csproj' and $([System.String]::Copy('$(MSBuildProjectName)').StartsWith('AuraZip'))">true</UsesAuraZipOfficePreview>
+  </PropertyGroup>
+  <!-- Exclusions must apply to every consuming project: NuGet does not propagate
+       ExcludeAssets across a ProjectReference. NPOI is used only for text and crypto. -->
+  <ItemGroup Condition="'$(UsesAuraZipOfficePreview)' == 'true'">
+    <PackageReference Include="SixLabors.ImageSharp" Version="2.1.13" ExcludeAssets="all" />
+    <PackageReference Include="NSax" Version="1.0.2" ExcludeAssets="all" />
+    <!-- These advisories concern an excluded dependency, never a shipped engine. -->
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-gwg2-r3hj-4w44" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-j3p4-wp97-rph4" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-j9gm-c75j-xc9q" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-jjfr-hcj7-qf5w" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-wmxv-xphr-5c9g" />
+  </ItemGroup>
+  <Target Name="RejectUnusedOfficeEngines" AfterTargets="ResolvePackageAssets" Condition="'$(UsesAuraZipOfficePreview)' == 'true'">
+    <Error Condition="'%(RuntimeCopyLocalItems.Filename)' == 'SixLabors.ImageSharp' or '%(RuntimeCopyLocalItems.Filename)' == 'NSax'"
+           Text="Office previews must not deploy the excluded ImageSharp or NSax engines." />
+  </Target>
+  <Target Name="VerifyOfficeRuntimeOutput" AfterTargets="Build" Condition="'$(UsesAuraZipOfficePreview)' == 'true'">
+    <Error Condition="Exists('$(TargetDir)SixLabors.ImageSharp.dll') or Exists('$(TargetDir)NSax.dll')"
+           Text="Remove excluded ImageSharp/NSax binaries from this project's build output before packaging." />
+  </Target>
+</Project>

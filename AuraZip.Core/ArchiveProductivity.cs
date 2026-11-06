@@ -10,9 +10,13 @@ public sealed partial class ArchiveService
 {
     public static async Task<FileHashes> ComputeHashesAsync(string path, CancellationToken token = default, OperationControl? control = null)
     {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, true);
+        return await ComputeHashesAsync(stream, token, control);
+    }
+    private static async Task<FileHashes> ComputeHashesAsync(Stream stream, CancellationToken token, OperationControl? control)
+    {
         using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         using var md5 = IncrementalHash.CreateHash(HashAlgorithmName.MD5);
-        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, true);
         var buffer = new byte[128 * 1024]; int read;
         while ((read = await stream.ReadAsync(buffer, token)) > 0) { control?.Wait(token); sha.AppendData(buffer, 0, read); md5.AppendData(buffer, 0, read); }
         return new(Convert.ToHexString(sha.GetHashAndReset()), Convert.ToHexString(md5.GetHashAndReset()));
@@ -82,8 +86,7 @@ public sealed partial class ArchiveService
             await using (var input = File.OpenRead(rebuilt))
             await using (var output = File.Create(staged)) { await input.CopyToAsync(output, token); }
             control.Wait(token);
-            if (await ComputeHashesAsync(index.FilePath, token) != originalHash) throw new IOException("The archive changed outside AuraZip. Reopen it before saving.");
-            File.Move(staged, index.FilePath, true);
+            await ReplaceArchiveAsync(staged, index.FilePath, originalHash, token);
         }
         finally { if (File.Exists(staged)) File.Delete(staged); }
     }
@@ -135,9 +138,25 @@ public sealed partial class ArchiveService
             await using (var output = File.Create(staged)) { await input.CopyToAsync(output, token); }
             WriteZipComment(staged, comment);
             token.ThrowIfCancellationRequested();
-            if (await ComputeHashesAsync(path, token) != original) throw new IOException("The archive changed outside AuraZip. Reopen it before saving.");
-            File.Move(staged, path, true);
+            await ReplaceArchiveAsync(staged, path, original, token);
         }
         finally { if (File.Exists(staged)) File.Delete(staged); }
+    }
+
+    private static async Task ReplaceArchiveAsync(string staged, string destination, FileHashes expected, CancellationToken token)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            token.ThrowIfCancellationRequested();
+            if (await ComputeHashesAsync(destination, token) != expected) throw new IOException("The archive changed outside AuraZip. Reopen it before saving.");
+            try { File.Replace(staged, destination, null); return; }
+            catch (Exception ex) when (attempt < 5 && ex is IOException or UnauthorizedAccessException
+                && (ex.HResult & 0xffff) is 5 or 32 or 33 or 1175 && File.Exists(staged) && File.Exists(destination))
+            {
+                // Filesystem filters can briefly retain a newly written archive. Retry
+                // only while both files exist, checking the original hash each time.
+                await Task.Delay(40 << attempt, token);
+            }
+        }
     }
 }
