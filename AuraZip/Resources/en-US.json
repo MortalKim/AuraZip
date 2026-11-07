@@ -269,5 +269,13 @@
   "The legacy Office document contains invalid offsets or records.": "The legacy Office document contains invalid offsets or records.",
   "The legacy Office document contains invalid offsets.": "The legacy Office document contains invalid offsets.",
   "关于 AuraZip": "About AuraZip",
-  "版本 {0}": "Version {0}"
+  "版本 {0}": "Version {0}",
+  "隐私": "Privacy",
+  "不记录历史": "Do not record history",
+  "已开启": "On",
+  "已关闭": "Off",
+  "清除历史记录": "Clear history",
+  "启用并保存后清除已有记录，不再记录打开的压缩包。": "Enable and save to clear existing history and stop recording opened archives.",
+  "历史记录已关闭": "History is disabled",
+  "历史记录已清除。": "History cleared."
 }

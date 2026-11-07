@@ -15,7 +15,7 @@
   <Identity
     Name="600875F506911.AuraZipPreview"
     Publisher="CN=D53B1635-0092-44DF-A5B8-4C5B7EC6CEE4"
-    Version="0.0.17.0" />
+    Version="0.0.18.0" />
 
   <mp:PhoneIdentity PhoneProductId="8694f25e-0107-458e-ba48-43dc535b6b0e" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 

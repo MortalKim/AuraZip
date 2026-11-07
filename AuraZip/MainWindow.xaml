@@ -79,7 +79,10 @@
                         <Button Content="{Binding [新建压缩包], Source={StaticResource Strings}}" Click="New_Click"/>
                     </StackPanel>
                     <TextBlock Text="{Binding [或将压缩包拖放到窗口中], Source={StaticResource Strings}}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12"/>
-                    <TextBlock Text="{Binding [最近打开], Source={StaticResource Strings}}" FontWeight="SemiBold" Margin="0,24,0,0"/>
+                    <Grid Margin="0,24,0,0" ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="{Binding [最近打开], Source={StaticResource Strings}}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <Button x:Name="ClearRecentHistory" Grid.Column="1" Content="{Binding [清除历史记录], Source={StaticResource Strings}}" Click="ClearHistory_Click" IsEnabled="False"/>
+                    </Grid>
                     <TextBlock x:Name="RecentEmpty" Text="{Binding [尚未打开压缩包], Source={StaticResource Strings}}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12"/>
                     <ListView x:Name="RecentList" MaxHeight="380" IsItemClickEnabled="True" ItemClick="RecentList_ItemClick" SelectionMode="None">
                         <ListView.ItemTemplate><DataTemplate x:DataType="local:RecentArchive">

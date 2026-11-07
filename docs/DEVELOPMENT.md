@@ -57,6 +57,7 @@ powershell -File tests/FeaturesUi.ps1 -ArchiveFormat 7z
 powershell -File tests/ProductivityUi.ps1
 powershell -File tests/OfficeUi.ps1
 powershell -File tests/OfficeUi.ps1 -EncryptedArchive
+powershell -File tests/HistoryUi.ps1
 powershell -File tests/ProductivityUi.ps1 -ContainingFormat zip
 powershell -File tests/ProductivityUi.ps1 -ContainingFormat 7z
 powershell -File tests/PasswordUi.ps1
@@ -74,6 +75,8 @@ powershell -File tests/DragUi.ps1 -Multiple
 ```
 
 `ProductivityUi.ps1` 使用系统默认文本编辑器验证文件写回流程。界面测试使用独立样本和输出目录。
+
+`HistoryUi.ps1` 验证两处清除入口、不记录历史开关的保存与取消、重启后的持久化，以及恢复记录后的新增行为。测试会备份并恢复原有设置和历史记录。
 
 `OfficeUi.ps1` 覆盖旧版文档、文档密码、原生版式控件、分页与取消；`-EncryptedArchive` 验证压缩包密码和文档密码互不影响。Office 解析使用同一可执行文件的独立进程，以匿名管道传输文档与密码，Windows Job Object 限制内存与子进程数量。密码不进入命令行或临时文件。不要并发运行会重建同一核心测试程序的脚本。
 

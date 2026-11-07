@@ -17,11 +17,17 @@ public sealed class AppSettings
     public bool OpenAfterExtraction { get; set; }
     public bool ShowFolderPane { get; set; } = true;
     public string RarEncoderPath { get; set; } = "";
+    public bool RecordHistory { get; set; } = true;
     public List<string> RecentFiles { get; set; } = new();
 
     public static AppSettings Load()
     {
-        try { return JsonSerializer.Deserialize(File.ReadAllText(SettingsPath), AppJsonContext.Default.AppSettings) ?? new(); }
+        try
+        {
+            var settings = JsonSerializer.Deserialize(File.ReadAllText(SettingsPath), AppJsonContext.Default.AppSettings) ?? new();
+            if (!settings.RecordHistory && settings.RecentFiles.Count > 0) settings.ClearHistory();
+            return settings;
+        }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) { return new(); }
     }
 
@@ -29,6 +35,7 @@ public sealed class AppSettings
     {
         try
         {
+            if (!RecordHistory) RecentFiles.Clear();
             Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
             var temp = SettingsPath + ".tmp";
             File.WriteAllText(temp, JsonSerializer.Serialize(this, AppJsonContext.Default.AppSettings));
@@ -39,9 +46,16 @@ public sealed class AppSettings
 
     public void Remember(string path)
     {
+        if (!RecordHistory) return;
         RecentFiles.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
         RecentFiles.Insert(0, path);
         RecentFiles = RecentFiles.Take(12).ToList();
+        Save();
+    }
+
+    public void ClearHistory()
+    {
+        RecentFiles.Clear();
         Save();
     }
 }

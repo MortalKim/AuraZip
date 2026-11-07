@@ -146,9 +146,24 @@ public sealed partial class MainWindow : Window
         _previewCancellation?.Cancel(); _index = null; _password = null; _codePage = null; _parents.Clear();
         StartPanel.Visibility = Visibility.Visible; ArchivePanel.Visibility = Visibility.Collapsed;
         WindowTitle.Text = Title = "AuraZip"; StatusText.Text = T("就绪"); FormatStatus.Text = "";
-        RecentList.ItemsSource = _settings.RecentFiles.Where(File.Exists).Select(p => new RecentArchive(Path.GetFileName(p), p)).ToList();
-        RecentEmpty.Visibility = RecentList.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        RefreshRecentArchives();
         UpdateCommands();
+    }
+
+    private void RefreshRecentArchives()
+    {
+        RecentList.ItemsSource = (_settings.RecordHistory ? _settings.RecentFiles.Where(File.Exists) : Enumerable.Empty<string>())
+            .Select(p => new RecentArchive(Path.GetFileName(p), p)).ToList();
+        RecentEmpty.Text = T(_settings.RecordHistory ? "尚未打开压缩包" : "历史记录已关闭");
+        RecentEmpty.Visibility = RecentList.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        ClearRecentHistory.IsEnabled = _settings.RecentFiles.Count > 0;
+    }
+
+    private void ClearHistory_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.ClearHistory();
+        RefreshRecentArchives();
+        StatusText.Text = T("历史记录已清除。");
     }
 
     private async Task PickArchiveAsync()
@@ -501,6 +516,22 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(rar); panel.Children.Add(chooseRar);
         panel.Children.Add(new TextBlock { Text = T("RAR 创建和修改调用本机 WinRAR 编码器，需遵守其许可；RAR 解压无需安装 WinRAR。"), TextWrapping = TextWrapping.Wrap, MaxWidth = 360, FontSize = 12 });
         panel.Children.Add(new TextBlock { Text = T("压缩文件的操作收纳在 AuraZip 子菜单中。"), TextWrapping = TextWrapping.Wrap, MaxWidth = 360, FontSize = 12 });
+        var privacy = new StackPanel { Spacing = 8 };
+        privacy.Children.Add(new TextBlock { Text = T("隐私"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+        var noHistory = new ToggleSwitch { Header = T("不记录历史"), IsOn = !_settings.RecordHistory, OnContent = T("已开启"), OffContent = T("已关闭") };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(noHistory, "DoNotRecordHistory");
+        privacy.Children.Add(noHistory);
+        privacy.Children.Add(new TextBlock { Text = T("启用并保存后清除已有记录，不再记录打开的压缩包。"), TextWrapping = TextWrapping.Wrap, MaxWidth = 360, FontSize = 12 });
+        var clearHistory = new Button { Content = T("清除历史记录"), IsEnabled = _settings.RecentFiles.Count > 0 };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(clearHistory, "SettingsClearHistory");
+        var historyStatus = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12, Visibility = Visibility.Collapsed };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetLiveSetting(historyStatus, Microsoft.UI.Xaml.Automation.Peers.AutomationLiveSetting.Polite);
+        clearHistory.Click += (_, _) =>
+        {
+            _settings.ClearHistory(); RefreshRecentArchives(); clearHistory.IsEnabled = false;
+            historyStatus.Text = T("历史记录已清除。"); historyStatus.Visibility = Visibility.Visible;
+        };
+        privacy.Children.Add(clearHistory); privacy.Children.Add(historyStatus); panel.Children.Add(privacy);
         var packageVersion = Windows.ApplicationModel.Package.Current.Id.Version;
         var about = new StackPanel { Spacing = 4, Margin = new Thickness(0, 8, 0, 0) };
         about.Children.Add(new TextBlock { Text = T("关于 AuraZip"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
@@ -532,6 +563,7 @@ public sealed partial class MainWindow : Window
             _settings.OpenAfterExtraction = open.IsChecked == true;
             _settings.RarEncoderPath = rar.Text.Trim(); _archives.ConfigureRarEncoder(_settings.RarEncoderPath);
             _settings.Language = language.SelectedIndex == 1 ? "zh-CN" : language.SelectedIndex == 2 ? "en-US" : "System";
+            _settings.RecordHistory = !noHistory.IsOn;
             _settings.Save(); Strings.SetLanguage(_settings.Language); ApplyTheme(); RefreshLanguage();
         }
         finally { _dialogOpen = false; }
@@ -539,6 +571,7 @@ public sealed partial class MainWindow : Window
 
     private void RefreshLanguage()
     {
+        RefreshRecentArchives();
         RefreshControlNames();
         SearchBox.PlaceholderText = _searchAll ? T("搜索整个压缩包") : T("搜索当前目录");
         NameHeader.Content = T("名称") + (_sort == "Name" ? (_descending ? " ↓" : " ↑") : "");
