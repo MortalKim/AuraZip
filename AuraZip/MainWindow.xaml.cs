@@ -33,6 +33,7 @@ public sealed partial class MainWindow : Window
     private string _currentPath = "", _query = "", _sort = "Name";
     private bool _descending, _busy, _dialogOpen;
     private bool _stopShellBatch;
+    private bool _closeWhenIdle;
     private string? _password;
     private CancellationTokenSource? _previewCancellation;
     private DataTemplate? _wideFileTemplate;
@@ -91,8 +92,18 @@ public sealed partial class MainWindow : Window
         var copy = new KeyboardAccelerator { Key = VirtualKey.C, Modifiers = VirtualKeyModifiers.Control };
         copy.Invoked += (_, e) => { if (!_busy && !_dialogOpen) { e.Handled = true; Copy_Click(this, new RoutedEventArgs()); } };
         FileList.KeyboardAccelerators.Add(copy);
-        Closed += (_, _) => { WindowTitle.UnregisterPropertyChangedCallback(TextBlock.ForegroundProperty, _titleForegroundCallback); _previewCancellation?.Cancel(); _opening?.Cancel(); ResetRichPreview(); };
-        AppWindow.Closing += (_, e) => { if (_busy) { e.Cancel = true; StatusText.Text = T("Finish or cancel the current operation before closing AuraZip."); } };
+        OperationDialog.ExitRequested += OperationExitRequested;
+        Closed += (_, _) => { OperationDialog.ExitRequested -= OperationExitRequested; WindowTitle.UnregisterPropertyChangedCallback(TextBlock.ForegroundProperty, _titleForegroundCallback); _previewCancellation?.Cancel(); _opening?.Cancel(); ResetRichPreview(); };
+        AppWindow.Closing += (_, e) =>
+        {
+            if (OperationDialog.RequestWindowClose(Root.XamlRoot, () => { _closeWhenIdle = true; _stopShellBatch = true; })) { e.Cancel = true; return; }
+            if (_busy) { e.Cancel = true; StatusText.Text = T("Finish or cancel the current operation before closing AuraZip."); }
+        };
+    }
+
+    private void OperationExitRequested(XamlRoot root)
+    {
+        if (ReferenceEquals(root, Root.XamlRoot)) { _closeWhenIdle = true; _stopShellBatch = true; }
     }
 
     private void AddShortcut(VirtualKey key, VirtualKeyModifiers modifiers, Action action)
@@ -275,6 +286,7 @@ public sealed partial class MainWindow : Window
 
     private void UpdateCommands()
     {
+        if (_closeWhenIdle && !_busy) DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => { if (_closeWhenIdle && !_busy) { _closeWhenIdle = false; Close(); } });
         ExtractCommand.IsEnabled = TestCommand.IsEnabled = PropertiesCommand.IsEnabled = _index is not null && !_busy;
         ViewCommand.IsEnabled = _index is not null && FileList.SelectedItems.Count == 1 && !_busy;
         AddFilesCommand.IsEnabled = DeleteCommand.IsEnabled = _index is not null && EditableZip && !_busy;

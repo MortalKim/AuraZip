@@ -38,6 +38,8 @@ internal static class RarWritingChecks
             check(created.OriginalBytes == payload.Length + 200000 + new FileInfo(nested).Length && created.PackedBytes == new FileInfo(path).Length, "RAR result reports real input and output sizes: " + label);
             check((await service.ReadPreviewAsync(path, "资料.txt", password)).SequenceEqual(payload), "RAR payload previews correctly: " + label);
             check(progress.Values.Last().FilesDone == 3 && progress.Values.Last().TotalFiles == 3 && progress.Values.Last().BytesDone == created.OriginalBytes, "RAR completion reports the final file count: " + label);
+            check(progress.Values.Any(p => p.Stage == ArchiveOperationStage.Validating), "RAR creation identifies its integrity verification phase: " + label);
+            check(progress.Values.Zip(progress.Values.Skip(1)).All(p => p.First.BytesDone <= p.Second.BytesDone), "RAR creation progress never moves backwards during verification: " + label);
             var output = Path.Combine(directory, label + "-out"); await service.ExtractAsync(index, output, null, ConflictPolicy.Fail, password, control, progress, default);
             check(File.ReadAllBytes(Path.Combine(output, "random.bin")).SequenceEqual(File.ReadAllBytes(random)) && Directory.Exists(Path.Combine(output, "目录/empty")), "RAR roundtrip extraction matches original bytes: " + label);
             if (password is not null)

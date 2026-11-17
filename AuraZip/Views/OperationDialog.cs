@@ -12,6 +12,15 @@ namespace AuraZip.Views;
 
 public sealed class OperationDialog
 {
+    internal static event Action<XamlRoot>? ExitRequested;
+    private static OperationDialog? _active;
+    private XamlRoot? _root;
+    private Action<Action>? _requestClose;
+    public static bool RequestWindowClose(XamlRoot root, Action accepted)
+    {
+        if (_active?._root != root || _active._requestClose is null) return false;
+        _active._requestClose(accepted); return true;
+    }
     public bool WasCancelled { get; private set; }
     public Exception? LastError { get; private set; }
     public async Task<bool> RunAsync(XamlRoot root, string title, string source, string? destination,
@@ -32,6 +41,7 @@ public sealed class OperationDialog
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(count, "OperationFileCount");
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(status, "OperationStatus");
         long processed = 0, totalBytes = 0;
+        var stage = ArchiveOperationStage.Processing;
         var activeClock = Stopwatch.StartNew();
         var panel = new StackPanel { Spacing = 16, MinWidth = Math.Min(380, Math.Max(200, root.Size.Width - 80)) };
         panel.Children.Add(new TextBlock { Text = source, TextWrapping = TextWrapping.Wrap, FontSize = 12, MaxWidth = 430 });
@@ -46,21 +56,52 @@ public sealed class OperationDialog
             PrimaryButtonText = destination is null ? "" : T("打开目标文件夹"),
             SecondaryButtonText = T("暂停"), CloseButtonText = T("取消"), DefaultButton = ContentDialogButton.None
         };
+        bool confirmingClose = false, closeRequested = false;
+        Action? acceptClose = null;
+        var originalPrimary = dialog.PrimaryButtonText;
+        var operationContent = dialog.Content;
+        void RestoreOperation()
+        {
+            confirmingClose = false; dialog.Content = operationContent; dialog.Title = title;
+            dialog.PrimaryButtonText = originalPrimary;
+            dialog.SecondaryButtonText = control.IsPaused ? T("继续") : T("暂停"); dialog.CloseButtonText = T("取消");
+            dialog.DefaultButton = ContentDialogButton.None;
+        }
+        // Confirm inside the existing modal: WinUI permits only one ContentDialog per root.
+        _root = root; _active = this;
+        _requestClose = accepted =>
+        {
+            if (!running) { accepted(); dialog.Hide(); return; }
+            if (confirmingClose || closeRequested) return;
+            acceptClose = accepted; confirmingClose = true;
+            dialog.Title = T("任务尚未完成");
+            dialog.Content = new TextBlock { Text = T("是否继续当前任务？取消任务并关闭会等待临时文件清理完成。"), TextWrapping = TextWrapping.Wrap, MaxWidth = 430 };
+            dialog.PrimaryButtonText = T("继续任务"); dialog.SecondaryButtonText = T("取消任务并关闭"); dialog.CloseButtonText = "";
+            dialog.DefaultButton = ContentDialogButton.Primary;
+        };
         dialog.PrimaryButtonClick += (_, args) =>
         {
             args.Cancel = true;
+            if (confirmingClose) { RestoreOperation(); return; }
             try { OpenFolder(destination!); }
             catch (Exception ex) { status.Visibility = Visibility.Visible; status.Text = T("Could not open the destination folder: ") + ex.Message + T(" Try again when the folder is available."); }
         };
-        dialog.SecondaryButtonClick += (_, args) => { args.Cancel = true; control.TogglePause(); if (control.IsPaused) activeClock.Stop(); else activeClock.Start(); dialog.SecondaryButtonText = control.IsPaused ? T("继续") : T("暂停"); status.Text = control.IsPaused ? T("已暂停") : T("正在处理…"); };
+        dialog.SecondaryButtonClick += (_, args) =>
+        {
+            args.Cancel = true;
+            if (!running) { if (succeeded) { ExitRequested?.Invoke(root); dialog.Hide(); } return; }
+            if (confirmingClose) { RestoreOperation(); closeRequested = true; acceptClose?.Invoke(); cancellation.Cancel(); dialog.SecondaryButtonText = ""; dialog.PrimaryButtonText = ""; dialog.CloseButtonText = T("正在取消…"); return; }
+            control.TogglePause(); if (control.IsPaused) activeClock.Stop(); else activeClock.Start();
+            dialog.SecondaryButtonText = control.IsPaused ? T("继续") : T("暂停"); status.Text = control.IsPaused ? T("已暂停") : T("正在处理…");
+        };
         dialog.CloseButtonClick += (_, args) => { if (running) { args.Cancel = true; cancellation.Cancel(); dialog.CloseButtonText = T("正在取消…"); } };
-        dialog.Closing += (_, args) => { if (running) { args.Cancel = true; cancellation.Cancel(); } };
+        dialog.Closing += (_, args) => { if (running) { args.Cancel = true; if (confirmingClose) RestoreOperation(); else cancellation.Cancel(); } };
         var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         timer.Tick += (_, _) =>
         {
             elapsed.Text = T("用时  ") + clock.Elapsed.ToString(@"hh\:mm\:ss");
             var speed = activeClock.Elapsed.TotalSeconds > 0 ? processed / activeClock.Elapsed.TotalSeconds : 0;
-            rate.Text = speed > 0 ? F("速度：{0}/s · 预计剩余：{1}", ArchiveItem.FormatSize((long)speed), TimeSpan.FromSeconds(Math.Clamp((totalBytes - processed) / speed, 0, 31536000)).ToString(@"hh\:mm\:ss")) : T("正在计算速度…");
+            rate.Text = stage == ArchiveOperationStage.Validating ? T("正在校验生成的压缩包…") : stage == ArchiveOperationStage.Finalizing ? T("正在完成归档写入，剩余时间取决于编码器和磁盘。") : speed > 0 ? F("平均处理速度：{0}/s · 预计剩余：{1}", ArchiveItem.FormatSize((long)speed), TimeSpan.FromSeconds(Math.Clamp((totalBytes - processed) / speed, 0, 31536000)).ToString(@"hh\:mm\:ss")) : T("正在计算速度…");
         };
         timer.Start();
         var showing = dialog.ShowAsync();
@@ -70,21 +111,24 @@ public sealed class OperationDialog
             if (!running || (clock.Elapsed - lastPaint < TimeSpan.FromMilliseconds(80) && p.FilesDone != p.TotalFiles)) return;
             lastPaint = clock.Elapsed;
             processed = p.BytesDone; totalBytes = p.TotalBytes;
+            stage = p.Stage;
             file.Text = p.FileName;
             status.Text = p.Stage switch
             {
                 ArchiveOperationStage.Preparing => T("正在准备文件…"),
                 ArchiveOperationStage.Compressing => T("正在压缩文件…"),
                 ArchiveOperationStage.Finalizing => T("正在完成压缩包…"),
+                ArchiveOperationStage.Validating => T("正在校验生成的压缩包…"),
                 _ => status.Text
             };
-            bar.IsIndeterminate = false;
+            bar.IsIndeterminate = stage == ArchiveOperationStage.Finalizing;
             bar.Value = p.TotalBytes > 0 ? Math.Min(99, 100d * p.BytesDone / p.TotalBytes) : p.TotalFiles > 0 ? Math.Min(99, 100d * p.FilesDone / p.TotalFiles) : 99;
             count.Text = F("{0} / {1} 个文件 · {2} / {3}", p.FilesDone, p.TotalFiles, ArchiveItem.FormatSize(p.BytesDone), ArchiveItem.FormatSize(p.TotalBytes));
         }));
         try
         {
             await operation(control, progress, cancellation.Token);
+            if (confirmingClose) RestoreOperation();
             running = false;
             succeeded = true;
             if (progress.Last is { } completed)
@@ -108,17 +152,20 @@ public sealed class OperationDialog
                 catch (Exception ex) { status.Visibility = Visibility.Visible; status.Text = T("The operation completed, but the destination folder could not be opened: ") + ex.Message + T(" Use the folder button to retry."); }
             }
         }
-        catch (OperationCanceledException) { WasCancelled = true; dialog.Title = T("已取消"); status.Text = T("已完成的文件会保留，当前未完成的文件已清理。"); }
-        catch (Exception ex) { LastError = ex; dialog.Title = T("Operation failed"); status.Text = DescribeError(ex) + T("\nCheck the file, password and destination, then try again."); }
+        catch (OperationCanceledException) { if (confirmingClose) RestoreOperation(); WasCancelled = true; dialog.Title = T("已取消"); status.Text = T("已完成的文件会保留，当前未完成的文件已清理。"); }
+        catch (Exception ex) { if (confirmingClose) RestoreOperation(); LastError = ex; dialog.Title = T("Operation failed"); status.Text = DescribeError(ex) + T("\nCheck the file, password and destination, then try again."); }
         finally
         {
+            if (confirmingClose) RestoreOperation();
             running = false; timer.Stop(); clock.Stop(); activeClock.Stop(); rate.Text = "";
             elapsed.Text = T("用时  ") + clock.Elapsed.ToString(@"hh\:mm\:ss");
             bar.IsIndeterminate = false;
-            dialog.SecondaryButtonText = ""; dialog.CloseButtonText = T("关闭");
+            dialog.SecondaryButtonText = succeeded && (title == T("正在压缩") || title == T("正在解压")) ? T("退出") : "";
+            dialog.CloseButtonText = T("关闭");
         }
-        if (autoClose) dialog.Hide();
-        await showing;
+        if (autoClose || closeRequested) dialog.Hide();
+        try { await showing; }
+        finally { _requestClose = null; _root = null; if (ReferenceEquals(_active, this)) _active = null; }
         return succeeded;
     }
 

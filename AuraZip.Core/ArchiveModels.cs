@@ -72,7 +72,7 @@ public sealed record ArchiveIndex(string FilePath, IReadOnlyList<ArchiveItem> It
 }
 
 public enum ConflictPolicy { Fail, Overwrite, Skip, Rename, Newer }
-public enum ArchiveOperationStage { Processing, Preparing, Compressing, Finalizing }
+public enum ArchiveOperationStage { Processing, Preparing, Compressing, Finalizing, Validating }
 public sealed record ArchiveProgress(string FileName, long BytesDone, long TotalBytes, int FilesDone, int TotalFiles, ArchiveOperationStage Stage = ArchiveOperationStage.Processing);
 public sealed record OperationResult(int FilesWritten, int FilesSkipped, string Destination);
 

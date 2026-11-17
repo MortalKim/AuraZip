@@ -277,5 +277,13 @@
   "清除历史记录": "Clear history",
   "启用并保存后清除已有记录，不再记录打开的压缩包。": "Enable and save to clear existing history and stop recording opened archives.",
   "历史记录已关闭": "History is disabled",
-  "历史记录已清除。": "History cleared."
+  "历史记录已清除。": "History cleared.",
+  "任务尚未完成": "Operation in progress",
+  "是否继续当前任务？取消任务并关闭会等待临时文件清理完成。": "Continue the current operation? Cancelling and closing will wait for temporary files to be cleaned up.",
+  "继续任务": "Continue operation",
+  "取消任务并关闭": "Cancel operation and close",
+  "正在完成归档写入，剩余时间取决于编码器和磁盘。": "Finishing archive writes. The remaining time depends on the encoder and disk.",
+  "平均处理速度：{0}/s · 预计剩余：{1}": "Average processing rate: {0}/s · Estimated remaining: {1}",
+  "正在校验生成的压缩包…": "Verifying the generated archive…",
+  "退出": "Exit"
 }

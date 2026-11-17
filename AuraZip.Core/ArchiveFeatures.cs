@@ -146,16 +146,16 @@ public sealed partial class ArchiveService
         long start = direct ? 0 : total / 10;
         long firstEnd = wrappedTar ? total / 3 : total - total / 100;
         var fileSizes = entries.Where(e => !e.Directory).ToDictionary(e => e.Key, e => new FileInfo(e.Source).Length, StringComparer.OrdinalIgnoreCase);
-        var firstProgress = new CompressionProgress(p => progress.Report(p with { BytesDone = start + (long)((double)p.BytesDone / Math.Max(1, total) * (firstEnd - start)), Stage = ArchiveOperationStage.Compressing }));
-        await RunEngineAsync(arguments, input, control, firstProgress, total, count, token, fileSizes);
+        var firstProgress = new CompressionProgress(p => progress.Report(p with { BytesDone = start + (long)((double)p.BytesDone / Math.Max(1, total) * (firstEnd - start)), Stage = !wrappedTar && p.Stage == ArchiveOperationStage.Finalizing ? ArchiveOperationStage.Finalizing : ArchiveOperationStage.Compressing }));
+        await RunEngineAsync(arguments, input, control, firstProgress, total, count, token, fileSizes).ConfigureAwait(false);
         if (wrappedTar)
         {
             var codec = options.Format[4..] == "gz" ? "gzip" : options.Format[4..] == "bz2" ? "bzip2" : "xz";
             var wrap = new List<string> { "a", "-t" + codec, "-mx=" + options.Level, "-bsp1", "-sccUTF-8", "-y" };
             if (options.VolumeBytes > 0) wrap.Add("-v" + options.VolumeBytes + "b");
             wrap.Add(outputArchive); wrap.Add(tarArchive);
-            var wrapProgress = new CompressionProgress(p => progress.Report(p with { FileName = Path.GetFileName(destination), BytesDone = firstEnd + (long)((double)p.BytesDone / Math.Max(1, total) * (total - total / 100 - firstEnd)), FilesDone = count, Stage = ArchiveOperationStage.Compressing }));
-            await RunEngineAsync(wrap, workspace.Path, control, wrapProgress, total, count, token);
+            var wrapProgress = new CompressionProgress(p => progress.Report(p with { FileName = Path.GetFileName(destination), BytesDone = firstEnd + (long)((double)p.BytesDone / Math.Max(1, total) * (total - total / 100 - firstEnd)), FilesDone = count, Stage = p.Stage == ArchiveOperationStage.Finalizing ? ArchiveOperationStage.Finalizing : ArchiveOperationStage.Compressing }));
+            await RunEngineAsync(wrap, workspace.Path, control, wrapProgress, total, count, token).ConfigureAwait(false);
         }
         var outputs = Directory.EnumerateFiles(outputDirectory, outputName + "*").OrderBy(p => p, StringComparer.Ordinal).ToList();
         if (outputs.Count == 0) throw new IOException("The compression engine did not produce an archive.");
@@ -196,6 +196,7 @@ public sealed partial class ArchiveService
             if (line.Length > 0) parser.Read(line.ToString());
         });
         var errors = process.StandardError.ReadToEndAsync();
+        var exited = process.WaitForExitAsync();
         bool suspended = false;
         try
         {
@@ -204,8 +205,9 @@ public sealed partial class ArchiveService
                 if (control.IsPaused && !suspended && OperatingSystem.IsWindows()) { suspended = NtSuspendProcess(process.Handle) >= 0; }
                 control.Wait(token);
                 if (suspended) { NtResumeProcess(process.Handle); suspended = false; }
-                await Task.Delay(100, token).ConfigureAwait(false);
+                await Task.WhenAny(exited, Task.Delay(100, token)).ConfigureAwait(false);
             }
+            token.ThrowIfCancellationRequested();
             await reading;
             var error = await errors;
             if (process.ExitCode != 0) throw new IOException("Compression engine error " + process.ExitCode + ": " + error.Trim());

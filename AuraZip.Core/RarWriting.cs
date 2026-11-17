@@ -40,7 +40,7 @@ public sealed partial class ArchiveService
         bool direct = parent is not null && roots.All(p => string.Equals(Path.GetDirectoryName(p), parent, StringComparison.OrdinalIgnoreCase))
             && !roots.Any(p => Directory.Exists(p) && destination.StartsWith(p + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
         var input = direct ? parent! : Path.Combine(workspace.Path, "input");
-        if (!direct) await StageRarSourcesAsync(input, entries, control, progress, total, token);
+        if (!direct) await StageRarSourcesAsync(input, entries, control, new CompressionProgress(p => progress.Report(p with { BytesDone = p.BytesDone / 10 })), total, token);
         var list = Path.Combine(workspace.Path, "inputs.txt");
         await File.WriteAllLinesAsync(list, roots.Select(Path.GetFileName)!, new UTF8Encoding(false), token);
         var output = Path.Combine(workspace.Path, "output.rar");
@@ -50,16 +50,23 @@ public sealed partial class ArchiveService
         arguments.AddRange(RarPassword(options.Password, options.EncryptNames));
         arguments.Add(output); arguments.Add("@" + list);
         var sizes = entries.Where(e => !e.Directory).ToDictionary(e => e.Key, e => new FileInfo(e.Source).Length, StringComparer.OrdinalIgnoreCase);
-        await RunRarAsync(arguments, input, control, progress, total, sizes, token);
+        long compressionStart = direct ? 0 : total / 10, verificationStart = total - total / 10;
+        await RunRarAsync(arguments, input, control, new CompressionProgress(p => progress.Report(p with
+        { BytesDone = compressionStart + (long)((double)p.BytesDone / Math.Max(1, total) * (verificationStart - compressionStart)) })), total, sizes, token);
         var outputs = Directory.EnumerateFiles(workspace.Path, "output*.rar").OrderBy(p => p.Length).ThenBy(p => p, StringComparer.Ordinal).ToArray();
         if (outputs.Length == 0) throw new IOException("The compression engine did not produce an archive.");
         var first = outputs.FirstOrDefault(p => p.EndsWith(".part1.rar", StringComparison.OrdinalIgnoreCase)) ?? outputs[0];
-        await TestAsync(await OpenAsync(first, options.Password, token), options.Password, control, progress, token);
+        progress.Report(new(Path.GetFileName(destination), verificationStart, total, sizes.Count, sizes.Count, ArchiveOperationStage.Validating));
+        var verifying = new CompressionProgress(p => progress.Report(p with { Stage = ArchiveOperationStage.Validating,
+            BytesDone = verificationStart + (long)((double)p.BytesDone / Math.Max(1, total) * (total - total / 100 - verificationStart)),
+            TotalBytes = total, FilesDone = sizes.Count, TotalFiles = sizes.Count }));
+        await TestAsync(await OpenAsync(first, options.Password, token), options.Password, control, verifying, token);
         var targets = outputs.Select(p => Path.GetFileName(p).Equals("output.rar", StringComparison.OrdinalIgnoreCase)
             ? destination : Path.Combine(directory, stem + Path.GetFileName(p)["output".Length..])).ToArray();
         if (targets.Any(p => Directory.Exists(p) || (!overwrite && File.Exists(p)))) throw new IOException("An output archive already exists. Choose a different name.");
         long packed = outputs.Sum(p => new FileInfo(p).Length);
         var committed = new List<string>();
+        progress.Report(new(Path.GetFileName(destination), total - total / 100, total, sizes.Count, sizes.Count, ArchiveOperationStage.Finalizing));
         try
         {
             for (int i = 0; i < outputs.Length; i++)

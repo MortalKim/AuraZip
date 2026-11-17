@@ -14,6 +14,7 @@ internal sealed class CompressionProgressParser(IProgress<ArchiveProgress> progr
     private string _file = "";
     private long _bytes, _completedBytes;
     private int _done;
+    private bool _finishing;
 
     public void Read(string record)
     {
@@ -36,10 +37,11 @@ internal sealed class CompressionProgressParser(IProgress<ArchiveProgress> progr
             var match = Regex.Match(line, @"^(\d{1,3})%(?:\s+(\d+))?");
             if (!match.Success) return;
             var percent = Math.Min(int.Parse(match.Groups[1].Value), 100);
+            _finishing |= percent == 100;
             _bytes = Math.Max(_bytes, (long)((double)total * percent / 100));
             if (match.Groups[2].Success && int.TryParse(match.Groups[2].Value, out var done)) _done = Math.Max(_done, Math.Min(done, files));
         }
-        progress.Report(new(_file, Math.Min(_bytes, total), total, _done, files));
+        progress.Report(new(_file, Math.Min(_bytes, total), total, _done, files, _finishing ? ArchiveOperationStage.Finalizing : ArchiveOperationStage.Processing));
     }
 
     public void Complete() => progress.Report(new(_file, total, total, files, files));
