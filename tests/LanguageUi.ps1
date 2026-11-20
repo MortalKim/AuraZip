@@ -39,7 +39,7 @@ Check 'archive remains open' { (Find 'WindowTitle' -Id).Current.Name -eq $initia
 $projectRoot=Split-Path -Parent $PSScriptRoot
 $shellTest=Join-Path $projectRoot 'AuraZip.Shell/bin/x64/Debug/AuraZip.Shell.Tests.exe'
 if(Test-Path -LiteralPath $shellTest) {
-    & $shellTest (Join-Path $projectRoot 'AuraZip/bin/x64/Debug/net8.0-windows10.0.19041.0/win-x64/AuraZip.Shell.dll') (Join-Path $projectRoot 'artifacts/Samples/AuraZip-sample.zip') --registered-en
+    & $shellTest (Join-Path $projectRoot 'AuraZip/bin/x64/Debug/net10.0-windows10.0.19041.0/win-x64/AuraZip.Shell.dll') (Join-Path $projectRoot 'artifacts/Samples/AuraZip-sample.zip') --registered-en
     if($LASTEXITCODE -ne 0) { throw 'The native menu did not follow the selected language.' }
 }
 Invoke (Find 'ExtractCommand' -Id)

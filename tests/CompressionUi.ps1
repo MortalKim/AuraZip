@@ -3,7 +3,7 @@ $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 $projectRoot=Split-Path -Parent $PSScriptRoot
-$exe=Join-Path $projectRoot "AuraZip/bin/x64/$Configuration/net8.0-windows10.0.19041.0/win-x64/AuraZip.exe"
+$exe=Join-Path $projectRoot "AuraZip/bin/x64/$Configuration/net10.0-windows10.0.19041.0/win-x64/AuraZip.exe"
 $fixture=Join-Path $projectRoot ('artifacts/CompressionUi-'+[Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $fixture | Out-Null
 $source=Join-Path $fixture 'source.txt';[IO.File]::WriteAllText($source,'native compression contents')

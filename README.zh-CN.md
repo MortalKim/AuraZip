@@ -51,7 +51,7 @@
 
 ## 从源码运行
 
-需要 Windows、.NET 8 SDK，以及 Visual Studio 2026 的 Windows App SDK C# 和 C++ 构建工具。可在 Visual Studio Installer 中导入 [`.vsconfig`](.vsconfig)。
+需要 Windows、.NET 10 SDK，以及 Visual Studio 2026 的 Windows App SDK C# 和 C++ 构建工具。可在 Visual Studio Installer 中导入 [`.vsconfig`](.vsconfig)。
 
 ```powershell
 # 构建并运行

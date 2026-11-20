@@ -51,7 +51,7 @@ Supports Windows 10 version 1809 and later, with x86 and x64 packages. Modern Fi
 
 ## Build from source
 
-Requires Windows, the .NET 8 SDK, and Visual Studio 2026 with Windows App SDK C# and C++ build tools. Import [`.vsconfig`](.vsconfig) using Visual Studio Installer to install the required components.
+Requires Windows, the .NET 10 SDK, and Visual Studio 2026 with Windows App SDK C# and C++ build tools. Import [`.vsconfig`](.vsconfig) using Visual Studio Installer to install the required components.
 
 ```powershell
 # Build and run

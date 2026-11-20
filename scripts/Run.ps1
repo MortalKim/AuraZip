@@ -10,7 +10,7 @@ if (!$SkipBuild) {
     & dotnet build $project -p:Platform=x64 "-p:Configuration=$Configuration"
     if ($LASTEXITCODE -ne 0) { throw 'Build failed. Resolve the errors above and retry.' }
 }
-$layout = Join-Path $projectRoot "AuraZip/bin/x64/$Configuration/net8.0-windows10.0.19041.0/win-x64"
+$layout = Join-Path $projectRoot "AuraZip/bin/x64/$Configuration/net10.0-windows10.0.19041.0/win-x64"
 $manifest = Join-Path $layout 'AppxManifest.xml'
 if (!(Test-Path -LiteralPath $manifest)) { throw 'The package layout is missing. Run without -SkipBuild.' }
 [xml]$packageManifest = Get-Content -LiteralPath $manifest

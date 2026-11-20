@@ -3,12 +3,14 @@
 ## 环境
 
 - Windows 10 1809 或更新版本；新版资源管理器菜单验证需要 Windows 11。
-- .NET 8 SDK。
+- .NET 10 SDK。
 - Visual Studio 2026、Windows App SDK C#、Windows SDK 和 MSVC v145 C++ 工具。
 - 在 Visual Studio Installer 中导入 [`.vsconfig`](../.vsconfig)。ARM64 额外需要对应 C++ 工具。
 - 注册开发 MSIX 包需要 Windows 允许开发部署。
 
 依赖版本以项目文件为准。官方压缩引擎已随源码保留，无需另行安装 7-Zip 才能运行 AuraZip。
+
+`global.json` 选择已安装的稳定版 .NET 10 SDK，允许在 10.0 系列内使用更新的功能带。应用、核心库与测试均以 .NET 10 为目标；安装包内置运行时，用户无需另行安装 .NET。
 
 ## 构建与运行
 
