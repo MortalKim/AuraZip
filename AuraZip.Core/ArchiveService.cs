@@ -119,7 +119,12 @@ public sealed partial class ArchiveService
             {
                 foreach (var path in paths) _streams.Add(File.OpenRead(path));
                 var options = ReadOptions(password, codePage); options.LeaveStreamOpen = true;
-                Archive = ArchiveFactory.Open(_streams, options);
+                // Encrypted ZIP entries with data descriptors can omit the local
+                // compressed size. Factory probing cannot recognize these archives;
+                // their signature still identifies ZIP unambiguously.
+                Archive = IsZip(_streams[0])
+                    ? SharpCompress.Archives.Zip.ZipArchive.Open(_streams, options)
+                    : ArchiveFactory.Open(_streams, options);
             }
             catch { foreach (var stream in _streams) stream.Dispose(); throw; }
         }

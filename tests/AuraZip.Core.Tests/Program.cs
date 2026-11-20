@@ -71,6 +71,7 @@ try
     Check(ShellRequest.Parse(new[] { "--shell", "smart", "--", Path.Combine(root, "ordinary.txt") }) is null, "shell rejects unsupported extensions");
     Check(ShellRequest.Parse(new[] { "--shell", "smart", "--", "bad\0.zip" }) is null, "shell rejects invalid paths without crashing");
     Check(ShellRequest.Parse(new[] { "--shell", "smart", shellFile }) is null, "shell requires an explicit argument separator");
+    await ZipDescriptorChecks.Run(root, Check, Reject);
     var path = CreateZip("资料.zip", ("docs/readme.txt", "真实解压内容"), ("root.txt", "root"));
     var index = await service.OpenAsync(path);
     Check(index.Items.Any(e => e.Key == "docs" && e.IsDirectory), "implicit directories are indexed");
